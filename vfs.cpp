@@ -4,45 +4,45 @@
 void Vfs_Interface::forget(vfs_ino_t, unsigned long nlookup) {
 }
 
-int Vfs_Interface::format(const char *name, size_t name_len) {
+int Vfs_Interface::format(const char16_t *name, size_t name_len) {
 	return -ENOSYS;
 }
 
-int Vfs_Interface::mknod(vfs_ino_t parent, const char *name, size_t name_len, mode_t mode, dev_t rdev, uid_t owner, gid_t group) {
+int Vfs_Interface::mknod(vfs_ino_t parent, const char16_t *name, size_t name_len, mode_t mode, dev_t rdev, uid_t owner, gid_t group) {
 	return -ENOSYS;
 }
 
-int Vfs_Interface::mkdir(vfs_ino_t parent, const char *name, size_t name_len) {
+int Vfs_Interface::mkdir(vfs_ino_t parent, const char16_t *name, size_t name_len) {
 	return -ENOSYS;
 }
 
-int Vfs_Interface::unlink(vfs_ino_t parent, const char *name, size_t name_len) {
+int Vfs_Interface::unlink(vfs_ino_t parent, const char16_t *name, size_t name_len) {
 	return -ENOSYS;
 }
 
-int Vfs_Interface::rmdir(vfs_ino_t parent, const char *name, size_t name_len) {
-	return -ENOSYS;
-}
-
-
-int Vfs_Interface::symlink(vfs_ino_t parent, const char *name, size_t name_len, const char *link, size_t link_len) {
-	return -ENOSYS;
-}
-
-ssize_t Vfs_Interface::readlink(vfs_ino_t ino, char *target, size_t len) {
-	return -ENOSYS;
-}
-
-int Vfs_Interface::rename(vfs_ino_t parent, const char *name, size_t name_len, vfs_ino_t new_parent, const char *new_name, size_t new_name_len) {
-	return -ENOSYS;
-}
-
-int Vfs_Interface::link(vfs_ino_t ino, vfs_ino_t new_parent, const char *new_name, size_t new_name_len) {
+int Vfs_Interface::rmdir(vfs_ino_t parent, const char16_t *name, size_t name_len) {
 	return -ENOSYS;
 }
 
 
-int Vfs_Interface::create(vfs_ino_t parent, const char *name, size_t name_len, mode_t mode, uid_t owner, gid_t group, vfs_ino_t *ino, void **context) {
+int Vfs_Interface::symlink(vfs_ino_t parent, const char16_t *name, size_t name_len, const char16_t *link, size_t link_len) {
+	return -ENOSYS;
+}
+
+ssize_t Vfs_Interface::readlink(vfs_ino_t ino, char16_t *target, size_t len) {
+	return -ENOSYS;
+}
+
+int Vfs_Interface::rename(vfs_ino_t parent, const char16_t *name, size_t name_len, vfs_ino_t new_parent, const char16_t *new_name, size_t new_name_len) {
+	return -ENOSYS;
+}
+
+int Vfs_Interface::link(vfs_ino_t ino, vfs_ino_t new_parent, const char16_t *new_name, size_t new_name_len) {
+	return -ENOSYS;
+}
+
+
+int Vfs_Interface::create(vfs_ino_t parent, const char16_t *name, size_t name_len, mode_t mode, uid_t owner, gid_t group, vfs_ino_t *ino, void **context) {
 	return -ENOSYS;
 }
 
@@ -50,11 +50,11 @@ int Vfs_Interface::open(vfs_ino_t ino, void **context) {
 	return -ENOSYS;
 }
 
-int Vfs_Interface::read(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context) {
+int Vfs_Interface::read(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context) {
 	return -ENOSYS;
 }
 
-int Vfs_Interface::write(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context) {
+int Vfs_Interface::write(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context) {
 	return -ENOSYS;
 }
 
@@ -84,7 +84,7 @@ int Vfs_Interface::opendir(vfs_ino_t ino, void **context) {
 	return -ENOSYS;
 }
 
-int Vfs_Interface::readdir(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context) {
+int Vfs_Interface::readdir(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context) {
 	return -ENOSYS;
 }
 

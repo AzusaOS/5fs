@@ -5,21 +5,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <locale>
+#include <codecvt>
 
-Vfs_Linux_Block::Vfs_Linux_Block(const char *filename) {
+Vfs_Linux_Block::Vfs_Linux_Block(const char16_t *filename) {
 	p_refcount = 1;
-	p_fd = ::open(filename, O_RDWR | O_CREAT, 0755);
+	std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t> convert;
+	p_fd = ::open(convert.to_bytes(filename).c_str(), O_RDWR);
 	if (p_fd == -1) {
 		perror("open");
 		abort();
 	}
 }
 
-vfs_ino_t Vfs_Linux_Block::lookup(vfs_ino_t parent, const char *name, size_t name_len) {
+vfs_ino_t Vfs_Linux_Block::lookup(vfs_ino_t parent, const char16_t *name, size_t name_len) {
 	return -ENOSYS;
 }
 
-int Vfs_Linux_Block::read(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context) {
+int Vfs_Linux_Block::read(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context) {
 	if (ino != 0) return -EBADF;
 	auto seek_res = ::lseek(p_fd, off, SEEK_SET);
 	if (seek_res == -1) return -errno;
@@ -28,7 +31,7 @@ int Vfs_Linux_Block::read(vfs_ino_t ino, char *buffer, size_t size, off_t off, v
 	return res;
 }
 
-int Vfs_Linux_Block::write(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context) {
+int Vfs_Linux_Block::write(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context) {
 	if (ino != 0) return -EBADF;
 	auto seek_res = ::lseek(p_fd, off, SEEK_SET);
 	if (seek_res == -1) return -errno;
