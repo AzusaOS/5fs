@@ -8,9 +8,10 @@ typedef uint64_t gofs_ino_t;
 // magic value
 #define GOFS_AG_HEADER_MAGIC VAL_BE32(0x35465348) /* "5FSH" */
 
+// SO, data blocks are "FULL", inodes will be FULL if max inodes, else it'll be INO_AVA
 #define GOFS_BLOCK_FREE 0
-#define GOFS_BLOCK_INO 1
-#define GOFS_BLOCK_DATA 2
+#define GOFS_BLOCK_INO_AVA 1
+#define GOFS_BLOCK_FULL 2
 #define GOFS_BLOCK_RESERVED 3
 
 typedef unsigned char uuid_t[16];
@@ -23,6 +24,7 @@ typedef struct {
 	gofs_blk_t ag_reserved_blocks;
 	gofs_blk_t ag_ino_blocks;
 	gofs_blk_t ag_data_blocks;
+	uint32_t ag_alloc_pos; // position for next allocation. Go back to zero when reaching end of AG
 } __attribute__((packed)) gofs_ag_t;
 
 typedef struct {
