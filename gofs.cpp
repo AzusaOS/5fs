@@ -56,6 +56,7 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	int64_t max_blocks_per_ag = 0x40000000 / sb.sb_blocksize;
 	int64_t number_of_ag = blk_count / max_blocks_per_ag; // unless we have an exact match, this will need to be +1'd
 	if (blk_count % max_blocks_per_ag) number_of_ag += 1;
+	int64_t blocks_per_ag = blk_count / number_of_ag; // make all ag the same size. For example 1.5TB disk will have two 750GB ag
 
 	printf("disk is %ld bytes (%ld blocks)\n", s.st_size, blk_count);
 	printf("block size: %ld bytes\n", s.st_blksize);
