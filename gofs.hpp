@@ -8,6 +8,11 @@ typedef uint64_t gofs_ino_t;
 // magic value
 #define GOFS_AG_HEADER_MAGIC VAL_BE32(0x35465348) /* "5FSH" */
 
+#define GOFS_BLOCK_FREE 0
+#define GOFS_BLOCK_INO 1
+#define GOFS_BLOCK_DATA 2
+#define GOFS_BLOCK_RESERVED 3
+
 typedef unsigned char uuid_t[16];
 
 // header structure

@@ -61,8 +61,8 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	sb.sb_blocksize = VAL_BE32(p_blocksize);
 
 	// compute block count
-	int64_t blk_count = s.st_size / s.st_blksize;
-	if (blk_count * s.st_blksize != s.st_size) {
+	int64_t blk_count = s.st_size / p_blocksize;
+	if (blk_count * p_blocksize != s.st_size) {
 		printf("WARNING: Size of disk is not a multiple of block size!\n");
 	}
 
@@ -95,7 +95,7 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	int64_t blocks_per_ag = blk_count / number_of_ag; // make all ag the same size. For example 1.5TB disk will have two 750GB ag
 
 	printf("disk is %ld Kbytes (%ld blocks)\n", s.st_size/1024, blk_count);
-	printf("block size: %ld bytes\n", s.st_blksize);
+	printf("block size: %u bytes\n", p_blocksize);
 
 	printf("number of ag: %ld\n", number_of_ag);
 	create_ag(0, 0, blocks_per_ag); // create ag zero. create_ag has some special rules for ag0
@@ -171,13 +171,11 @@ void Vfs_GoFS::create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t len
 		int num_of_bits = reserved % (p_blocksize * 4); // number of bits to set to 1
 		for(int i = 0; i < num_of_bits; i++) {
 			// set this bit to 1
-			bits_set(bitmap_block, i, 3);
+			bits_set(bitmap_block, i, GOFS_BLOCK_RESERVED);
 		}
 		write_block(start_block + 1 + i, bitmap_block, p_blocksize);
 	}
 	free(bitmap_block);
-
-	printf("reserved blocks: %ld\n", reserved);
 }
 
 void Vfs_GoFS::write_block(gofs_blk_t block, char *buf, size_t buf_size) {
