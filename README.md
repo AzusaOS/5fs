@@ -12,13 +12,13 @@ Default inode size = 256 bytes
 
 Max allocation group size = max uint32 * 256 (max uint32 is 4G, so that'd be 1TB max)
 
-Journal: 64MB, stored in each allocation group (beginning of AG)
+Journal: single journal, 64MB
 
 ## Allocation group format
 
 * header
 * optional AG0 header (cached data such as free space, etc)
-* journal
+* journal (if AG0)
 * bitmap
 * optionally reserved space if AG0 and kernel is present. 5FS guarantees that kernel file system/kernel.bin will be stored in continuous blocks. Exact offset is stored in AG0 header.
 

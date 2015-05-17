@@ -9,14 +9,6 @@
 #define VAL_BE32(_x) (__builtin_bswap32(_x))
 #endif
 
-// magic value
-#define GOFS_HEADER_MAGIC VAL_BE32(0x35465348) /* "5FSH" */
-
-// header structure
-typedef struct {
-	uint32_t magic;
-} __attribute__((packed)) gofs_ag_header_t;
-
 Vfs_GoFS::Vfs_GoFS(Vfs_Interface *parent, vfs_ino_t parent_ino, void **parent_context) {
 	p_parent = parent;
 	p_parent_ino = parent_ino;
@@ -40,6 +32,9 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 
 	printf("disk is %ld bytes (%ld blocks)\n", s.st_size, blk_count);
 	printf("block size: %ld bytes\n", s.st_blksize);
+
+	printf("struct size: %d\n", sizeof(gofs_sb_t));
+	printf("inode size: %d\n", sizeof(gofs_in_t));
 
 	// s.st_blksize
 	// s.st_size

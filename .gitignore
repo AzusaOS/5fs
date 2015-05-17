@@ -1,3 +1,4 @@
 /mkfs.gofs
 /disk.bin
 *.o
+*.d

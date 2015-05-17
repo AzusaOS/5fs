@@ -6,6 +6,11 @@ COMMON=linux.o vfs.o gofs.o
 
 all: mkfs.gofs
 
+-include $(wildcard *.d)
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -MD -c -o $@ $<
+
 mkfs.gofs: $(COMMON) mkfs.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
