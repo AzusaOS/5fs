@@ -52,6 +52,8 @@ typedef struct {
 	char reserved[262];
 } __attribute__((packed)) gofs_sb_t; // super block (max size = sb_blocksize, which is min 512)
 
+static_assert(sizeof(gofs_sb_t) == 512, "Invalid superblock size");
+
 typedef struct {
 	int32_t t_sec;
 	int32_t t_nsec;
@@ -74,4 +76,6 @@ typedef struct {
 	uint32_t ino_gen;
 	char reserved[62]; // make size reach 128 bytes
 } __attribute__((packed)) gofs_in_t;
+
+static_assert(sizeof(gofs_in_t)==128, "Invalid size for gofs_in_t");
 
