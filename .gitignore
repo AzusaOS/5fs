@@ -2,3 +2,4 @@
 /disk.bin
 *.o
 *.d
+.*.swp

@@ -30,8 +30,8 @@ public:
 
 	virtual int create(vfs_ino_t parent, const char16_t *name, size_t name_len, mode_t mode, uid_t owner, gid_t group, vfs_ino_t *ino, void **context);
 	virtual int open(vfs_ino_t ino, void **context);
-	virtual int read(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context);
-	virtual int write(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context);
+	virtual int read(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context);
+	virtual int write(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context);
 	virtual int flush(vfs_ino_t ino, void **context); // flush write buffers to detect any pending write error (space, etc)
 	virtual int release(vfs_ino_t ino, void **context);
 	virtual int fsync(vfs_ino_t ino, void **context); // force writing to disk now
@@ -54,8 +54,8 @@ public:
 	Vfs_Linux_Block(const char16_t *filename);
 
 	virtual vfs_ino_t lookup(vfs_ino_t parent, const char16_t *name, size_t name_len);
-	virtual int read(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context);
-	virtual int write(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context);
+	virtual int read(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context);
+	virtual int write(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context);
 	virtual int fsync(vfs_ino_t ino, void **context);
 	virtual int getattr(vfs_ino_t ino, struct stat *, void **context);
 

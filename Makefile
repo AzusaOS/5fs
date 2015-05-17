@@ -15,14 +15,15 @@ mkfs.gofs: $(COMMON) mkfs.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 clean:
-	$(RM) $(COMMON) mkfs.o
+	$(RM) $(COMMON) $(COMMON:.o=.d) mkfs.o mkfs.d
 
 distclean:
-	$(RM) $(COMMON) mkfs.o mkfs.gofs disk.bin
+	$(RM) $(COMMON) $(COMMON:.o=.d) mkfs.o mkfs.d mkfs.gofs disk.bin
 
 disk.bin:
 	@echo "Making 100MB disk"
 	dd if=/dev/zero of=disk.bin bs=1048576 seek=100 count=0
+	#dd if=/dev/zero of=disk.bin bs=1048576 seek=$$[ 1048576 * 6 ] count=0
 
 .PHONY: test
 

@@ -50,11 +50,11 @@ int Vfs_Interface::open(vfs_ino_t ino, void **context) {
 	return -ENOSYS;
 }
 
-int Vfs_Interface::read(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context) {
+int Vfs_Interface::read(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context) {
 	return -ENOSYS;
 }
 
-int Vfs_Interface::write(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context) {
+int Vfs_Interface::write(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context) {
 	return -ENOSYS;
 }
 

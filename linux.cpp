@@ -22,7 +22,7 @@ vfs_ino_t Vfs_Linux_Block::lookup(vfs_ino_t parent, const char16_t *name, size_t
 	return -ENOSYS;
 }
 
-int Vfs_Linux_Block::read(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context) {
+int Vfs_Linux_Block::read(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context) {
 	if (ino != 0) return -EBADF;
 	auto seek_res = ::lseek(p_fd, off, SEEK_SET);
 	if (seek_res == -1) return -errno;
@@ -31,7 +31,7 @@ int Vfs_Linux_Block::read(vfs_ino_t ino, char16_t *buffer, size_t size, off_t of
 	return res;
 }
 
-int Vfs_Linux_Block::write(vfs_ino_t ino, char16_t *buffer, size_t size, off_t off, void **context) {
+int Vfs_Linux_Block::write(vfs_ino_t ino, char *buffer, size_t size, off_t off, void **context) {
 	if (ino != 0) return -EBADF;
 	auto seek_res = ::lseek(p_fd, off, SEEK_SET);
 	if (seek_res == -1) return -errno;

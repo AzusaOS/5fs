@@ -2,19 +2,6 @@
 
 #include "vfs.hpp"
 
-class Vfs_GoFS: public Vfs_Interface {
-public:
-	Vfs_GoFS(Vfs_Interface *parent, vfs_ino_t parent_ino, void **parent_context);
-
-	virtual vfs_ino_t lookup(vfs_ino_t parent, const char16_t *name, size_t name_len);
-	virtual int format(const char16_t *name, size_t name_len);
-
-private:
-	Vfs_Interface *p_parent;
-	vfs_ino_t p_parent_ino;
-	void **p_parent_context;
-};
-
 typedef uint64_t gofs_blk_t;
 typedef uint64_t gofs_ino_t;
 
@@ -27,7 +14,10 @@ typedef unsigned char uuid_t[16];
 typedef struct {
 	uint32_t ag_magic;
 	uint32_t ag_num; // ref of current ag, 0 for superblock
-	gofs_blk_t ag_dblocks; // free blocks
+	gofs_blk_t ag_free_blocks; // free blocks
+	gofs_blk_t ag_reserved_blocks;
+	gofs_blk_t ag_ino_blocks;
+	gofs_blk_t ag_data_blocks;
 } __attribute__((packed)) gofs_ag_t;
 
 typedef struct {
@@ -43,7 +33,7 @@ typedef struct {
 	gofs_blk_t sb_data_blocks; // data blocks
 	gofs_ino_t sb_root_ino;
 	gofs_blk_t sb_journal_start; // where journal is
-	gofs_blk_t sb_journal_length; // length of journal
+	gofs_blk_t sb_journal_length; // length of journal in blocks
 	gofs_blk_t sb_kernel_offset; // position of kernel (used for bootloader, set to zero if none)
 	gofs_blk_t sb_kernel_end; // end of kernel
 	uint64_t sb_flags;
@@ -78,4 +68,25 @@ typedef struct {
 } __attribute__((packed)) gofs_in_t;
 
 static_assert(sizeof(gofs_in_t)==128, "Invalid size for gofs_in_t");
+
+class Vfs_GoFS: public Vfs_Interface {
+public:
+	Vfs_GoFS(Vfs_Interface *parent, vfs_ino_t parent_ino, void **parent_context);
+
+	virtual vfs_ino_t lookup(vfs_ino_t parent, const char16_t *name, size_t name_len);
+	virtual int format(const char16_t *name, size_t name_len);
+
+private:
+	void create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t length);
+
+	void read_block(gofs_blk_t, char*, size_t);
+	void write_block(gofs_blk_t, char*, size_t);
+
+	Vfs_Interface *p_parent;
+	vfs_ino_t p_parent_ino;
+	void **p_parent_context;
+	uint32_t p_blocksize;
+
+	gofs_sb_t sb;
+};
 
