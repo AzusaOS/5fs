@@ -22,16 +22,16 @@
 static __inline__ void bits_set(char *loc, uint32_t index, int state) {
 	auto r = div(index, 4);
 	switch(r.rem) {
-		case 3: loc[r.quot] = (loc[r.quot] & 0x3f) | ((state & 0x3) << 6); return;
-		case 2: loc[r.quot] = (loc[r.quot] & 0xcf) | ((state & 0x3) << 4); return;
-		case 1: loc[r.quot] = (loc[r.quot] & 0xf3) | ((state & 0x3) << 2); return;
-		case 0: loc[r.quot] = (loc[r.quot] & 0xfc) | (state & 0x3); return;
+		case 0: loc[r.quot] = (loc[r.quot] & 0x3f) | ((state & 0x3) << 6); return;
+		case 1: loc[r.quot] = (loc[r.quot] & 0xcf) | ((state & 0x3) << 4); return;
+		case 2: loc[r.quot] = (loc[r.quot] & 0xf3) | ((state & 0x3) << 2); return;
+		case 3: loc[r.quot] = (loc[r.quot] & 0xfc) | (state & 0x3); return;
 	}
 }
 
 static __inline__ int bits_get(char *loc, uint32_t index) {
 	auto r = div(index, 4);
-	return (loc[r.quot] >> ((r.rem) * 2)) & 0x3;
+	return (loc[r.quot] >> ((3-r.rem) * 2)) & 0x3;
 }
 
 Vfs_GoFS::Vfs_GoFS(Vfs_Interface *parent, vfs_ino_t parent_ino, void **parent_context) {
@@ -98,15 +98,30 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	printf("block size: %u bytes\n", p_blocksize);
 
 	printf("number of ag: %ld\n", number_of_ag);
-	create_ag(0, 0, blocks_per_ag); // create ag zero. create_ag has some special rules for ag0
 
-	for(int64_t i = 1; i < number_of_ag; i++) {
+	for(int64_t i = 0; i < number_of_ag; i++) {
 		if (i != number_of_ag - 1) {
-			create_ag(i, blocks_per_ag * i, blocks_per_ag);
+			create_ag(i, blocks_per_ag * i, blocks_per_ag, blocks_per_ag * (i+1));
 		} else {
-			create_ag(i, blocks_per_ag * i, blk_count - (blocks_per_ag * i)); // all remaining blocks
+			create_ag(i, blocks_per_ag * i, blk_count - (blocks_per_ag * i), 0); // all remaining blocks
 		}
 	}
+
+	// create root inode
+	gofs_in_t root_ino;
+	memset(&root_ino, 0, sizeof(gofs_in_t));
+	root_ino.in_magic = GOFS_INO_MAGIC;
+	root_ino.in_mode = S_IFDIR | 0755;
+	root_ino.in_version = 1;
+	root_ino.in_format = GOFS_INODE_FORMAT_EMPTY;
+	root_ino.in_nlink = 1;
+	root_ino.in_uid = 0;
+	root_ino.in_gid = 0;
+// TODO	root_ino.in_atime = 0;
+	root_ino.in_size = 0;
+	root_ino.in_nblocks = 0;
+	root_ino.in_flags = 0;
+	root_ino.in_gen = 0;
 
 	// s.st_blksize
 	// s.st_size
@@ -114,7 +129,7 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	return -EINPROGRESS;
 }
 
-void Vfs_GoFS::create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t length) {
+void Vfs_GoFS::create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t length, gofs_blk_t next) {
 	gofs_ag_t ag;
 	memset(&ag, 0, sizeof(gofs_ag_t));
 
@@ -140,6 +155,7 @@ void Vfs_GoFS::create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t len
 		sb.ag.ag_num = 0; // root ag
 		sb.ag.ag_free_blocks = VAL_BE64(length - reserved);
 		sb.ag.ag_reserved_blocks = VAL_BE64(reserved);
+		sb.ag.ag_next = VAL_BE64(next);
 
 		write_block(start_block, (char*)&sb, sizeof(sb));
 	} else {
@@ -147,6 +163,7 @@ void Vfs_GoFS::create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t len
 		ag.ag_num = VAL_BE32(ag_num);
 		ag.ag_free_blocks = VAL_BE32(length - reserved);
 		ag.ag_reserved_blocks = VAL_BE64(reserved);
+		ag.ag_next = VAL_BE64(next);
 
 		write_block(start_block, (char*)&ag, sizeof(ag));
 	}

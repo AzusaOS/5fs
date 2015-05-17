@@ -7,12 +7,19 @@ typedef uint64_t gofs_ino_t;
 
 // magic value
 #define GOFS_AG_HEADER_MAGIC VAL_BE32(0x35465348) /* "5FSH" */
+#define GOFS_INO_MAGIC VAL_BE16(0x494e)
 
 // SO, data blocks are "FULL", inodes will be FULL if max inodes, else it'll be INO_AVA
 #define GOFS_BLOCK_FREE 0
 #define GOFS_BLOCK_INO_AVA 1
 #define GOFS_BLOCK_FULL 2
 #define GOFS_BLOCK_RESERVED 3
+
+// inode format type
+#define GOFS_INODE_FORMAT_EMPTY 1
+#define GOFS_INODE_FORMAT_EMBED 2
+#define GOFS_INODE_FORMAT_BLOCK 3
+#define GOFS_INODE_FORMAT_BTREE 4
 
 typedef unsigned char uuid_t[16];
 
@@ -24,6 +31,7 @@ typedef struct {
 	gofs_blk_t ag_reserved_blocks;
 	gofs_blk_t ag_ino_blocks;
 	gofs_blk_t ag_data_blocks;
+	gofs_blk_t ag_next;
 	uint32_t ag_alloc_pos; // position for next allocation. Go back to zero when reaching end of AG
 } __attribute__((packed)) gofs_ag_t;
 
@@ -57,20 +65,20 @@ typedef struct {
 } __attribute__((packed)) gofs_timestamp_t;
 
 typedef struct {
-	uint16_t ino_magic; // The inode signature where these two bytes are 0x494e, or "IN" in ASCII.
-	uint16_t ino_mode; // Specifies the mode access bits and type of file using the standard S_Ixxx values defined in stat.h.
-	int8_t ino_version; // should be set to 1
-	int8_t ino_format; // data storage format
-	uint32_t ino_nlink;
-	uint32_t ino_uid;
-	uint32_t ino_gid;
-	gofs_timestamp_t ino_atime; // unless noatime flag is set
-	gofs_timestamp_t ino_mtime; // last data change time
-	gofs_timestamp_t ino_ctime; // last inode change time
-	uint64_t ino_size;
-	uint64_t ino_nblocks; // number of blocks in use
-	uint32_t ino_flags;
-	uint32_t ino_gen;
+	uint16_t in_magic; // The inode signature where these two bytes are 0x494e, or "IN" in ASCII.
+	uint16_t in_mode; // Specifies the mode access bits and type of file using the standard S_Ixxx values defined in stat.h.
+	int8_t in_version; // should be set to 1
+	int8_t in_format; // data storage format
+	uint32_t in_nlink;
+	uint32_t in_uid;
+	uint32_t in_gid;
+	gofs_timestamp_t in_atime; // unless noatime flag is set
+	gofs_timestamp_t in_mtime; // last data change time
+	gofs_timestamp_t in_ctime; // last inode change time
+	uint64_t in_size;
+	uint64_t in_nblocks; // number of blocks in use
+	uint32_t in_flags;
+	uint32_t in_gen;
 	char reserved[62]; // make size reach 128 bytes
 } __attribute__((packed)) gofs_in_t;
 
@@ -84,7 +92,7 @@ public:
 	virtual int format(const char16_t *name, size_t name_len);
 
 private:
-	void create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t length);
+	void create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t length, gofs_blk_t next);
 
 	void read_block(gofs_blk_t, char*, size_t);
 	void write_block(gofs_blk_t, char*, size_t);
