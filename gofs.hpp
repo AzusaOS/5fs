@@ -91,6 +91,9 @@ public:
 	virtual vfs_ino_t lookup(vfs_ino_t parent, const char16_t *name, size_t name_len);
 	virtual int format(const char16_t *name, size_t name_len);
 
+	virtual int mount();
+	virtual int umount();
+
 private:
 	void create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t length, gofs_blk_t next);
 
@@ -101,6 +104,7 @@ private:
 	vfs_ino_t p_parent_ino;
 	void **p_parent_context;
 	uint32_t p_blocksize;
+	bool p_mounted;
 
 	gofs_sb_t sb;
 };

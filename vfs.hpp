@@ -16,6 +16,9 @@ public:
 	virtual vfs_ino_t lookup(vfs_ino_t parent, const char16_t *name, size_t name_len) = 0;
 	virtual void forget(vfs_ino_t, unsigned long nlookup);
 
+	virtual int mount(); // TODO options
+	virtual int umount();
+
 	virtual int format(const char16_t *name, size_t name_len);
 
 	virtual int mknod(vfs_ino_t parent, const char16_t *name, size_t name_len, mode_t mode, dev_t rdev, uid_t owner, gid_t group);

@@ -38,6 +38,7 @@ Vfs_GoFS::Vfs_GoFS(Vfs_Interface *parent, vfs_ino_t parent_ino, void **parent_co
 	p_parent = parent;
 	p_parent_ino = parent_ino;
 	p_parent_context = parent_context;
+	p_mounted = false;
 }
 
 vfs_ino_t Vfs_GoFS::lookup(vfs_ino_t parent, const char16_t *name, size_t name_len) {
@@ -46,6 +47,7 @@ vfs_ino_t Vfs_GoFS::lookup(vfs_ino_t parent, const char16_t *name, size_t name_l
 
 int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	if (name_len > 32) return -ENAMETOOLONG;
+	if (p_mounted) umount();
 
 	// read attributes of disk
 	struct stat s;
@@ -107,6 +109,8 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 		}
 	}
 
+	mount();
+
 	// create root inode
 	gofs_in_t root_ino;
 	memset(&root_ino, 0, sizeof(gofs_in_t));
@@ -125,7 +129,8 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 
 	// s.st_blksize
 	// s.st_size
-	printf("format\n");
+	printf("format done\n");
+	umount();
 	return -EINPROGRESS;
 }
 
@@ -202,5 +207,34 @@ void Vfs_GoFS::write_block(gofs_blk_t block, char *buf, size_t buf_size) {
 	}
 
 	p_parent->write(p_parent_ino, buf, buf_size, block * p_blocksize, p_parent_context);
+}
+
+void Vfs_GoFS::read_block(gofs_blk_t block, char *buf, size_t buf_size) {
+	if (buf_size > p_blocksize) {
+		printf("trying to read from block %lu more data than acceptable, giving up", block);
+		abort();
+	}
+
+	p_parent->read(p_parent_ino, buf, buf_size, block * p_blocksize, p_parent_context);
+}
+
+int Vfs_GoFS::mount() {
+	if (p_mounted) umount();
+	read_block(0, (char*)&sb, sizeof(sb));
+
+	if (sb.ag.ag_magic != GOFS_AG_HEADER_MAGIC)
+		return -EINVAL;
+
+	// TODO more checks
+	p_blocksize = VAL_BE32(sb.sb_blocksize);
+	p_mounted = true;
+	return 0;
+}
+
+int Vfs_GoFS::umount() {
+	if (!p_mounted) return -EINVAL;
+
+	p_mounted = false; // TODO flush buffers, etc
+	return 0;
 }
 

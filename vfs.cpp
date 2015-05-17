@@ -4,6 +4,14 @@
 void Vfs_Interface::forget(vfs_ino_t, unsigned long nlookup) {
 }
 
+int Vfs_Interface::mount() {
+	return -ENOSYS;
+}
+
+int Vfs_Interface::umount() {
+	return -ENOSYS;
+}
+
 int Vfs_Interface::format(const char16_t *name, size_t name_len) {
 	return -ENOSYS;
 }
