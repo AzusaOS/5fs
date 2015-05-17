@@ -49,6 +49,6 @@ int Vfs_Linux_Block::fsync(vfs_ino_t ino, void **context) {
 int Vfs_Linux_Block::getattr(vfs_ino_t ino, struct stat *s, void **) {
 	if (ino != 0) return -EBADF;
 	if (::fstat(p_fd, s) == -1) return -errno;
-	return -1;
+	return 0;
 }
 

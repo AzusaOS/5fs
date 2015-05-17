@@ -1,6 +1,21 @@
 #include "gofs.hpp"
 #include <stdio.h>
 #include <errno.h>
+#include <endian.h>
+
+#if __BYTE_ORDER == __BIG_ENDIAN
+#define VAL_BE32(_x) (_x)
+#else
+#define VAL_BE32(_x) (__builtin_bswap32(_x))
+#endif
+
+// magic value
+#define GOFS_HEADER_MAGIC VAL_BE32(0x35465348) /* "5FSH" */
+
+// header structure
+typedef struct {
+	uint32_t magic;
+} __attribute__((packed)) gofs_ag_header_t;
 
 Vfs_GoFS::Vfs_GoFS(Vfs_Interface *parent, vfs_ino_t parent_ino, void **parent_context) {
 	p_parent = parent;
@@ -13,6 +28,21 @@ vfs_ino_t Vfs_GoFS::lookup(vfs_ino_t parent, const char16_t *name, size_t name_l
 }
 
 int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
+	struct stat s;
+	auto s_res = p_parent->getattr(p_parent_ino, &s, p_parent_context);
+	if (s_res < 0) return s_res;
+
+	int64_t blk_count = s.st_size / s.st_blksize;
+
+	if (blk_count * s.st_blksize != s.st_size) {
+		printf("WARNING: Size of disk is not a multiple of block size!\n");
+	}
+
+	printf("disk is %ld bytes (%ld blocks)\n", s.st_size, blk_count);
+	printf("block size: %ld bytes\n", s.st_blksize);
+
+	// s.st_blksize
+	// s.st_size
 	printf("format\n");
 	return -EINPROGRESS;
 }
