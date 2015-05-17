@@ -2,7 +2,9 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
+#ifndef __APPLE__
 #include <uchar.h>
+#endif
 #include <sys/stat.h>
 
 typedef uint64_t vfs_ino_t;

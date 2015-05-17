@@ -27,7 +27,7 @@ typedef unsigned char uuid_t[16];
 typedef struct {
 	uint32_t ag_magic;
 	uint32_t ag_num; // ref of current ag, 0 for superblock
-	gofs_blk_t sb_dblocks; // free blocks
+	gofs_blk_t ag_dblocks; // free blocks
 } __attribute__((packed)) gofs_ag_t;
 
 typedef struct {

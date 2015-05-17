@@ -1,7 +1,7 @@
 #!/bin/make
 
 CXX=g++
-CXXFLAGS=-Wall -O0 -pipe --std=c++11 -static
+CXXFLAGS=-Wall -O0 -pipe --std=c++11
 COMMON=linux.o vfs.o gofs.o
 
 all: mkfs.gofs
@@ -22,7 +22,7 @@ distclean:
 
 disk.bin:
 	@echo "Making 100MB disk"
-	dd if=/dev/zero of=disk.bin bs=1024 count=102400
+	dd if=/dev/zero of=disk.bin bs=1048576 seek=100 count=0
 
 .PHONY: test
 
