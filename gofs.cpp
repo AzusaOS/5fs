@@ -1,4 +1,4 @@
-#include "GoFS.hpp"
+#include "gofs.hpp"
 #include <stdio.h>
 #include <errno.h>
 

@@ -1,4 +1,4 @@
-#include "GoFS.hpp"
+#include "gofs.hpp"
 #include <errno.h>
 
 void Vfs_Interface::forget(vfs_ino_t, unsigned long nlookup) {
