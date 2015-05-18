@@ -17,6 +17,7 @@ int main(int argc, char *argv[]) {
 	if (res < 0) {
 		errno = -res;
 		perror("format");
+		return 1;
 	}
 	return 0;
 }
