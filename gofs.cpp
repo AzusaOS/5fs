@@ -58,6 +58,7 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 
 	// set block size
 	p_blocksize = s.st_blksize;
+	p_inodesize = 256;
 	if (p_blocksize < 512) p_blocksize = 512;
 	if (p_blocksize > 65536) p_blocksize = 65536;
 	sb.sb_blocksize = VAL_BE32(p_blocksize);
@@ -74,8 +75,7 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	if (journal_size < (2*p_blocksize)) journal_size = p_blocksize*2;
 
 	// fill in some info
-	sb.sb_next_ag = VAL_BE32(1);
-	sb.sb_inodesize = VAL_BE16(256);
+	sb.sb_inodesize = VAL_BE16(p_inodesize);
 	sb.sb_journal_length = VAL_BE64(journal_size / p_blocksize); // 128MB
 	memcpy(sb.sb_disk_name, name, name_len * sizeof(char16_t));
 
@@ -101,6 +101,10 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 
 	printf("number of ag: %ld\n", number_of_ag);
 
+	sb.sb_next_ag = VAL_BE32(number_of_ag);
+
+	// create_ag() will write sb to disk, meaning we shouldn't modify this anymore after here
+
 	for(int64_t i = 0; i < number_of_ag; i++) {
 		if (i != number_of_ag - 1) {
 			create_ag(i, blocks_per_ag * i, blocks_per_ag, blocks_per_ag * (i+1));
@@ -109,7 +113,7 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 		}
 	}
 
-	mount();
+	mount(); // mount() will read sb) and all ag from disk
 
 	// create root inode
 	gofs_in_t root_ino;
@@ -127,11 +131,16 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	root_ino.in_flags = 0;
 	root_ino.in_gen = 0;
 
+	uint64_t root_ino_n = store_inode(&root_ino);
+	sb.sb_root_ino = root_ino_n;
+
+	ag_dirty(0); // ag0 = sb
+
 	// s.st_blksize
 	// s.st_size
-	printf("format done\n");
 	umount();
-	return -EINPROGRESS;
+	printf("format done\n");
+	return 0;
 }
 
 void Vfs_GoFS::create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t length, gofs_blk_t next) {
@@ -159,16 +168,20 @@ void Vfs_GoFS::create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t len
 		sb.ag.ag_magic = GOFS_AG_HEADER_MAGIC;
 		sb.ag.ag_num = 0; // root ag
 		sb.ag.ag_free_blocks = VAL_BE64(length - reserved);
-		sb.ag.ag_reserved_blocks = VAL_BE64(reserved);
+		sb.ag.ag_rsvd_blocks = VAL_BE64(reserved);
+		sb.ag.ag_this = VAL_BE64(start_block);
 		sb.ag.ag_next = VAL_BE64(next);
+		sb.ag.ag_length = VAL_BE32(length);
 
 		write_block(start_block, (char*)&sb, sizeof(sb));
 	} else {
 		ag.ag_magic = GOFS_AG_HEADER_MAGIC;
 		ag.ag_num = VAL_BE32(ag_num);
 		ag.ag_free_blocks = VAL_BE32(length - reserved);
-		ag.ag_reserved_blocks = VAL_BE64(reserved);
+		ag.ag_rsvd_blocks = VAL_BE64(reserved);
+		ag.ag_this = VAL_BE64(start_block);
 		ag.ag_next = VAL_BE64(next);
+		ag.ag_length = VAL_BE32(length);
 
 		write_block(start_block, (char*)&ag, sizeof(ag));
 	}
@@ -193,11 +206,20 @@ void Vfs_GoFS::create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t len
 		int num_of_bits = reserved % (p_blocksize * 4); // number of bits to set to 1
 		for(int i = 0; i < num_of_bits; i++) {
 			// set this bit to 1
-			bits_set(bitmap_block, i, GOFS_BLOCK_RESERVED);
+			bits_set(bitmap_block, i, GOFS_BLOCK_RSVD);
 		}
 		write_block(start_block + 1 + i, bitmap_block, p_blocksize);
 	}
 	free(bitmap_block);
+}
+
+void Vfs_GoFS::ag_dirty(uint32_t ag_n) {
+	if (ag_n == 0) {
+		write_block(0, (char*)&sb, sizeof(sb));
+		return;
+	}
+	auto ag = ag_map.find(ag_n)->second->ag;
+	write_block(VAL_BE64(ag->ag_this), (char*)ag, sizeof(*ag));
 }
 
 void Vfs_GoFS::write_block(gofs_blk_t block, char *buf, size_t buf_size) {
@@ -210,12 +232,30 @@ void Vfs_GoFS::write_block(gofs_blk_t block, char *buf, size_t buf_size) {
 }
 
 void Vfs_GoFS::read_block(gofs_blk_t block, char *buf, size_t buf_size) {
-	if (buf_size > p_blocksize) {
-		printf("trying to read from block %lu more data than acceptable, giving up", block);
-		abort();
-	}
-
 	p_parent->read(p_parent_ino, buf, buf_size, block * p_blocksize, p_parent_context);
+}
+
+void Vfs_GoFS::read_bitmap(gofs_ag_info_t*info) {
+	// compute bitmap length
+	auto div_res = ldiv(VAL_BE32(info->ag->ag_length), 4);
+	int64_t bitmap_size = div_res.quot + (div_res.rem?1:0);
+	div_res = ldiv(bitmap_size, p_blocksize);
+	int64_t bitmap_size_blocks = div_res.quot + (div_res.rem?1:0);
+
+	// allocate memory for bitmap
+	info->bitmap = (char*)malloc(bitmap_size_blocks * p_blocksize);
+
+	// read blocks
+	read_block(VAL_BE64(info->ag->ag_this)+1, info->bitmap, bitmap_size_blocks * p_blocksize);
+}
+
+void Vfs_GoFS::bitmap_dirty(gofs_ag_info_t*info, uint32_t pos) {
+	// write modified block of bitmap
+	// compute dirty position in block
+	uint32_t pos_in_bitmap = pos/4;
+	uint32_t block_in_bitmap = pos_in_bitmap / p_blocksize;
+
+	write_block(VAL_BE64(info->ag->ag_this)+1+block_in_bitmap, info->bitmap + (block_in_bitmap*p_blocksize), p_blocksize);
 }
 
 int Vfs_GoFS::mount() {
@@ -225,8 +265,35 @@ int Vfs_GoFS::mount() {
 	if (sb.ag.ag_magic != GOFS_AG_HEADER_MAGIC)
 		return -EINVAL;
 
-	// TODO more checks
+	ag_map.clear(); // TODO free values
+
 	p_blocksize = VAL_BE32(sb.sb_blocksize);
+	p_inodesize = VAL_BE16(sb.sb_inodesize);
+
+	auto ag = &sb.ag;
+	auto info = (gofs_ag_info_t*)malloc(sizeof(gofs_ag_info_t));
+
+	info->ag = ag;
+	read_bitmap(info);
+
+	ag_map.insert({0, info});
+
+	while(ag->ag_next) {
+		gofs_blk_t loc = VAL_BE64(ag->ag_next);
+		ag = (gofs_ag_t*)malloc(sizeof(gofs_ag_t));
+		read_block(loc, (char*)ag, sizeof(gofs_ag_t));
+		if (ag->ag_magic != GOFS_AG_HEADER_MAGIC) {
+			free(ag);
+			return -EINVAL;
+		}
+		info = (gofs_ag_info_t*)malloc(sizeof(gofs_ag_info_t));
+		info->ag = ag;
+		read_bitmap(info);
+		ag_map.insert({VAL_BE32(ag->ag_num), info});
+	}
+	printf("mount success, found %lu ag\n", ag_map.size());
+
+	// TODO more checks
 	p_mounted = true;
 	return 0;
 }
@@ -234,7 +301,87 @@ int Vfs_GoFS::mount() {
 int Vfs_GoFS::umount() {
 	if (!p_mounted) return -EINVAL;
 
+	ag_map.clear(); // TODO free values
 	p_mounted = false; // TODO flush buffers, etc
 	return 0;
+}
+
+uint64_t Vfs_GoFS::store_inode(gofs_in_t*inode, uint32_t target_ag) {
+	if (target_ag == 0xffffffff) {
+		// find first ag to be less full than the last one
+		target_ag = 0;
+		uint32_t last_ag_avail = 0;
+		for(auto it : ag_map) {
+			if (VAL_BE64(it.second->ag->ag_free_blocks) > last_ag_avail) {
+				target_ag = it.first;
+				last_ag_avail = VAL_BE64(it.second->ag->ag_free_blocks);
+			}
+			break;
+		}
+	}
+	// OK, so we store in target_ag
+	auto info = ag_map.find(target_ag)->second;
+
+//	gofs_blk_t start = VAL_BE64(ag->ag_this);
+	uint32_t pos = VAL_BE32(info->ag->ag_ino_alloc_pos);
+	uint32_t max_pos = pos-1;
+	uint32_t length = VAL_BE32(info->ag->ag_length);
+	if (length == 0) return 0;
+
+	// search in bitmap
+	while(true) {
+		if (pos >= length) pos = 0;
+
+		auto status = bits_get(info->bitmap, pos);
+//		printf("testing at pos %u/%u : %d\n", pos, VAL_BE32(info->ag->ag_length), status);
+		if ((status == GOFS_BLOCK_FREE) || (status == GOFS_BLOCK_PART)) {
+			// OK, we can store an inode there
+			gofs_in_t *block = (gofs_in_t*)malloc(p_blocksize);
+			if (status == GOFS_BLOCK_PART) {
+				read_block(pos, (char*)block, p_blocksize);
+			} else {
+				memset(block, 0, p_blocksize);
+			}
+
+			int inodes_per_block = p_blocksize / VAL_BE16(sb.sb_inodesize);
+			int inodes_present = 0;
+			bool inode_copied = false;
+			uint64_t res_inode_num = 0;
+
+			for(int i = 0; i < inodes_per_block; i++) {
+				if (block[i].in_magic == GOFS_INO_MAGIC) {
+					inodes_present++;
+					continue;
+				}
+				if (!inode_copied) {
+					inode_copied = true;
+					memcpy(&block[i], inode, sizeof(gofs_in_t));
+					inodes_present++;
+					res_inode_num = pos * inodes_per_block + i;
+					printf("inode %lu stored at block %u sub %d\n", res_inode_num, pos, i);
+				}
+			}
+
+			if (inodes_present == inodes_per_block) {
+				bits_set(info->bitmap, pos, GOFS_BLOCK_FULL);
+				bitmap_dirty(info, pos);
+			} else if (status == GOFS_BLOCK_FREE) {
+				bits_set(info->bitmap, pos, GOFS_BLOCK_PART);
+				bitmap_dirty(info, pos);
+			}
+
+			write_block(pos, (char*)block, p_blocksize);
+
+			info->ag->ag_ino_alloc_pos = VAL_BE32(pos);
+			ag_dirty(target_ag);
+			return res_inode_num;
+		}
+		if (pos == max_pos) return 0;
+		pos += 1;
+	}
+
+	info->ag->ag_ino_alloc_pos = VAL_BE32(pos);
+	ag_dirty(target_ag);
+	return 0; // in progress
 }
 

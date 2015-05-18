@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vfs.hpp"
+#include <map>
 
 typedef uint64_t gofs_blk_t;
 typedef uint64_t gofs_ino_t;
@@ -11,9 +12,9 @@ typedef uint64_t gofs_ino_t;
 
 // SO, data blocks are "FULL", inodes will be FULL if max inodes, else it'll be INO_AVA
 #define GOFS_BLOCK_FREE 0
-#define GOFS_BLOCK_INO_AVA 1
+#define GOFS_BLOCK_PART 1
 #define GOFS_BLOCK_FULL 2
-#define GOFS_BLOCK_RESERVED 3
+#define GOFS_BLOCK_RSVD 3
 
 // inode format type
 #define GOFS_INODE_FORMAT_EMPTY 1
@@ -27,13 +28,21 @@ typedef unsigned char uuid_t[16];
 typedef struct {
 	uint32_t ag_magic;
 	uint32_t ag_num; // ref of current ag, 0 for superblock
+	uint32_t ag_length;
 	gofs_blk_t ag_free_blocks; // free blocks
-	gofs_blk_t ag_reserved_blocks;
-	gofs_blk_t ag_ino_blocks;
-	gofs_blk_t ag_data_blocks;
+	gofs_blk_t ag_rsvd_blocks;
+	gofs_blk_t ag_part_blocks;
+	gofs_blk_t ag_full_blocks;
+	gofs_blk_t ag_this;
 	gofs_blk_t ag_next;
-	uint32_t ag_alloc_pos; // position for next allocation. Go back to zero when reaching end of AG
+	uint32_t ag_data_alloc_pos; // position for next allocation. Go back to zero when reaching end of AG
+	uint32_t ag_ino_alloc_pos; // position for next inode allocation. Can point to a partial block.
 } __attribute__((packed)) gofs_ag_t;
+
+typedef struct {
+	gofs_ag_t *ag;
+	char *bitmap;
+} gofs_ag_info_t;
 
 typedef struct {
 	union {
@@ -43,9 +52,9 @@ typedef struct {
 	uint32_t sb_blocksize; // initialized on mkfs
 	uint32_t sb_next_ag; // next number for a new ag
 	gofs_blk_t sb_free_blocks; // free blocks
-	gofs_blk_t sb_reserved_blocks; // reserved (superblock, etc) blocks
-	gofs_blk_t sb_ino_blocks; // inodes blocks
-	gofs_blk_t sb_data_blocks; // data blocks
+	gofs_blk_t sb_rsvd_blocks; // reserved (superblock, etc) blocks
+	gofs_blk_t sb_part_blocks; // inodes blocks
+	gofs_blk_t sb_full_blocks; // data blocks
 	gofs_ino_t sb_root_ino;
 	gofs_blk_t sb_journal_start; // where journal is
 	gofs_blk_t sb_journal_length; // length of journal in blocks
@@ -96,6 +105,11 @@ public:
 
 private:
 	void create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t length, gofs_blk_t next);
+	void ag_dirty(uint32_t ag_num);
+	uint64_t store_inode(gofs_in_t*, uint32_t target_ag = 0xffffffff);
+	
+	void read_bitmap(gofs_ag_info_t*);
+	void bitmap_dirty(gofs_ag_info_t*, uint32_t pos);
 
 	void read_block(gofs_blk_t, char*, size_t);
 	void write_block(gofs_blk_t, char*, size_t);
@@ -104,8 +118,11 @@ private:
 	vfs_ino_t p_parent_ino;
 	void **p_parent_context;
 	uint32_t p_blocksize;
+	uint16_t p_inodesize;
 	bool p_mounted;
 
 	gofs_sb_t sb;
+
+	std::map<uint32_t,gofs_ag_info_t*> ag_map;
 };
 

@@ -1,4 +1,4 @@
-#include "gofs.hpp"
+#include "vfs.hpp"
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
