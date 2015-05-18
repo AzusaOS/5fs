@@ -3,22 +3,26 @@
 CXX=g++
 CXXFLAGS=-Wall -O0 -pipe --std=c++11
 COMMON=linux.o vfs.o gofs.o
+TOOLS=mkfs.gofs gofsdump
+TOOLS_OBJECTS=$(patsubst %,%.o,$(TOOLS))
 
-all: mkfs.gofs
+all: $(TOOLS)
 
 -include $(wildcard *.d)
+
+.SUFFIXES:
 
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -MD -c -o $@ $<
 
-mkfs.gofs: $(COMMON) mkfs.o
+%: %.o $(COMMON)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 clean:
-	$(RM) $(COMMON) $(COMMON:.o=.d) mkfs.o mkfs.d
+	$(RM) $(COMMON) $(COMMON:.o=.d) $(TOOLS_OBJECTS) $(TOOLS_OBJECTS:.o=.d)
 
 distclean:
-	$(RM) $(COMMON) $(COMMON:.o=.d) mkfs.o mkfs.d mkfs.gofs disk.bin
+	$(RM) $(COMMON) $(COMMON:.o=.d) $(TOOLS_OBJECTS) $(TOOLS_OBJECTS:.o=.d) $(TOOLS) disk.bin
 
 disk.bin:
 	@echo "Making 100MB disk"

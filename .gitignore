@@ -1,4 +1,5 @@
 /mkfs.gofs
+/gofsdump
 /disk.bin
 *.o
 *.d
