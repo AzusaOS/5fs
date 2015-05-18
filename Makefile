@@ -12,6 +12,8 @@ all: $(TOOLS)
 
 .SUFFIXES:
 
+.PRECIOUS: %.o
+
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -MD -c -o $@ $<
 
@@ -31,5 +33,6 @@ disk.bin:
 
 .PHONY: test
 
-test: mkfs.gofs disk.bin
+test: mkfs.gofs gofsdump disk.bin
 	./mkfs.gofs disk.bin
+	./gofsdump disk.bin
