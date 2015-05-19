@@ -124,7 +124,7 @@ public:
 	const gofs_sb_t *superBlock() const;
 
 private:
-	void create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t length, gofs_blk_t next);
+	void create_ag(uint32_t ag_num, gofs_blk_t start_block, uint32_t length, gofs_blk_t next);
 	void ag_dirty(uint32_t ag_num);
 	uint64_t store_inode(gofs_in_t*, uint32_t target_ag = 0xffffffff);
 	

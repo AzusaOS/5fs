@@ -78,7 +78,7 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	// make sure each AG size is no higher than 1TB, or 0x10000000000
 	int64_t max_blocks_per_ag = 0x10000000000 / p_blocksize;
 	auto number_of_ag_div = ldiv(blk_count, max_blocks_per_ag);
-	int64_t number_of_ag = number_of_ag_div.quot + (number_of_ag_div.rem?1:0); // unless we have an exact match, this will need to be +1'd
+	uint32_t number_of_ag = number_of_ag_div.quot + (number_of_ag_div.rem?1:0); // unless we have an exact match, this will need to be +1'd
 
 	// if we only have one ag, but got more than 10k blocks, force two ag
 	if ((number_of_ag == 1) && (blk_count > 10000))
@@ -89,7 +89,7 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	printf("disk is %ld Kbytes (%ld blocks)\n", s.st_size/1024, blk_count);
 	printf("block size: %u bytes\n", p_blocksize);
 
-	printf("number of ag: %ld\n", number_of_ag);
+	printf("number of ag: %u\n", number_of_ag);
 
 	sb.sb_next_ag = GOFS_BE32(number_of_ag);
 
@@ -133,26 +133,26 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	return 0;
 }
 
-void Vfs_GoFS::create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t length, gofs_blk_t next) {
+void Vfs_GoFS::create_ag(uint32_t ag_num, gofs_blk_t start_block, uint32_t length, gofs_blk_t next) {
 	gofs_ag_t ag;
 	memset(&ag, 0, sizeof(gofs_ag_t));
 
-	printf("ag length: %ld\n", length);
+	printf("ag length: %u\n", length);
 
 	// compute bitmap size
 	auto div_res = ldiv(length, 4);
-	int64_t bitmap_size = div_res.quot + (div_res.rem?1:0);
-	printf("ag bitmap length: %ld\n", bitmap_size);
+	uint32_t bitmap_size = div_res.quot + (div_res.rem?1:0);
+	printf("ag bitmap length: %u\n", bitmap_size);
 	div_res = ldiv(bitmap_size, p_blocksize);
-	int64_t bitmap_size_blocks = div_res.quot + (div_res.rem?1:0);
-	printf("ag bitmap length: %ld blocks\n", bitmap_size_blocks);
+	uint32_t bitmap_size_blocks = div_res.quot + (div_res.rem?1:0);
+	printf("ag bitmap length: %u blocks\n", bitmap_size_blocks);
 
-	int64_t reserved = 1 + bitmap_size_blocks;
+	uint32_t reserved = 1 + bitmap_size_blocks;
 
 	if (ag_num == 0) {
 		// need journal
 		if (sb.sb_journal_length) {
-			sb.sb_journal_start = GOFS_BE64(reserved);
+			sb.sb_journal_start = GOFS_BE64((uint64_t)reserved);
 			reserved += GOFS_BE64(sb.sb_journal_length);
 		}
 		sb.ag.ag_magic = GOFS_AG_HEADER_MAGIC;
