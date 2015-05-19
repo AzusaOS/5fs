@@ -11,14 +11,22 @@ typedef uint64_t gofs_ino_t;
 #define GOFS_BE32(_x) (_x)
 #define GOFS_BE64(_x) (_x)
 #else
-#define GOFS_BE16(_x) (__builtin_bswap16(_x))
-#define GOFS_BE32(_x) (__builtin_bswap32(_x))
-#define GOFS_BE64(_x) (__builtin_bswap64(_x))
+template<typename T>
+static __inline__ T __do_bswap(T val) {
+	static_assert((sizeof(T) == 1) || (sizeof(T) == 2) || (sizeof(T) == 4) || (sizeof(T) == 8), "Invalid size used in template");
+	if (sizeof(T) == 1) return val;
+	if (sizeof(T) == 2) return (T)__builtin_bswap16((uint16_t)val);
+	if (sizeof(T) == 4) return (T)__builtin_bswap32((uint32_t)val);
+	if (sizeof(T) == 8) return (T)__builtin_bswap64((uint64_t)val);
+}
+#define GOFS_BE16(_x) (__do_bswap(_x))
+#define GOFS_BE32(_x) (__do_bswap(_x))
+#define GOFS_BE64(_x) (__do_bswap(_x))
 #endif
 
 // magic value
-#define GOFS_AG_HEADER_MAGIC GOFS_BE32(0x35465348) /* "5FSH" */
-#define GOFS_INO_MAGIC GOFS_BE16(0x494e)
+#define GOFS_AG_HEADER_MAGIC GOFS_BE32(0x35465348U) /* "5FSH" */
+#define GOFS_INO_MAGIC GOFS_BE16(0x494eU)
 
 // SO, data blocks are "FULL", inodes will be FULL if max inodes, else it'll be INO_AVA
 #define GOFS_BLOCK_FREE 0

@@ -122,7 +122,7 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	root_ino.in_gen = 0;
 
 	uint64_t root_ino_n = store_inode(&root_ino);
-	sb.sb_root_ino = root_ino_n;
+	sb.sb_root_ino = GOFS_BE64(root_ino_n);
 
 	ag_dirty(0); // ag0 = sb
 
@@ -152,7 +152,7 @@ void Vfs_GoFS::create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t len
 	if (ag_num == 0) {
 		// need journal
 		if (sb.sb_journal_length) {
-			sb.sb_journal_start = reserved;
+			sb.sb_journal_start = GOFS_BE64(reserved);
 			reserved += GOFS_BE64(sb.sb_journal_length);
 		}
 		sb.ag.ag_magic = GOFS_AG_HEADER_MAGIC;
