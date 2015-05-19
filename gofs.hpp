@@ -6,9 +6,19 @@
 typedef uint64_t gofs_blk_t;
 typedef uint64_t gofs_ino_t;
 
+#if __BYTE_ORDER == __BIG_ENDIAN
+#define GOFS_BE16(_x) (_x)
+#define GOFS_BE32(_x) (_x)
+#define GOFS_BE64(_x) (_x)
+#else
+#define GOFS_BE16(_x) (__builtin_bswap16(_x))
+#define GOFS_BE32(_x) (__builtin_bswap32(_x))
+#define GOFS_BE64(_x) (__builtin_bswap64(_x))
+#endif
+
 // magic value
-#define GOFS_AG_HEADER_MAGIC VAL_BE32(0x35465348) /* "5FSH" */
-#define GOFS_INO_MAGIC VAL_BE16(0x494e)
+#define GOFS_AG_HEADER_MAGIC GOFS_BE32(0x35465348) /* "5FSH" */
+#define GOFS_INO_MAGIC GOFS_BE16(0x494e)
 
 // SO, data blocks are "FULL", inodes will be FULL if max inodes, else it'll be INO_AVA
 #define GOFS_BLOCK_FREE 0
@@ -29,10 +39,10 @@ typedef struct {
 	uint32_t ag_magic;
 	uint32_t ag_num; // ref of current ag, 0 for superblock
 	uint32_t ag_length;
-	gofs_blk_t ag_free_blocks; // free blocks
-	gofs_blk_t ag_rsvd_blocks;
-	gofs_blk_t ag_part_blocks;
-	gofs_blk_t ag_full_blocks;
+	uint32_t ag_free_blocks; // free blocks
+	uint32_t ag_rsvd_blocks;
+	uint32_t ag_part_blocks;
+	uint32_t ag_full_blocks;
 	gofs_blk_t ag_this;
 	gofs_blk_t ag_next;
 	uint32_t ag_data_alloc_pos; // position for next allocation. Go back to zero when reaching end of AG
@@ -102,6 +112,8 @@ public:
 
 	virtual int mount();
 	virtual int umount();
+
+	const gofs_sb_t *superBlock() const;
 
 private:
 	void create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t length, gofs_blk_t next);

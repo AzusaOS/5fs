@@ -9,16 +9,6 @@
 #include <endian.h>
 #endif
 
-#if __BYTE_ORDER == __BIG_ENDIAN
-#define VAL_BE16(_x) (_x)
-#define VAL_BE32(_x) (_x)
-#define VAL_BE64(_x) (_x)
-#else
-#define VAL_BE16(_x) (__builtin_bswap16(_x))
-#define VAL_BE32(_x) (__builtin_bswap32(_x))
-#define VAL_BE64(_x) (__builtin_bswap64(_x))
-#endif
-
 static __inline__ void bits_set(char *loc, uint32_t index, int state) {
 	auto r = div(index, 4);
 	switch(r.rem) {
@@ -61,7 +51,7 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	p_inodesize = 256;
 	if (p_blocksize < 512) p_blocksize = 512;
 	if (p_blocksize > 65536) p_blocksize = 65536;
-	sb.sb_blocksize = VAL_BE32(p_blocksize);
+	sb.sb_blocksize = GOFS_BE32(p_blocksize);
 
 	// compute block count
 	int64_t blk_count = s.st_size / p_blocksize;
@@ -75,12 +65,12 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 	if (journal_size < (2*p_blocksize)) journal_size = p_blocksize*2;
 
 	// fill in some info
-	sb.sb_inodesize = VAL_BE16(p_inodesize);
-	sb.sb_journal_length = VAL_BE64(journal_size / p_blocksize); // 128MB
+	sb.sb_inodesize = GOFS_BE16(p_inodesize);
+	sb.sb_journal_length = GOFS_BE64(journal_size / p_blocksize); // 128MB
 	memcpy(sb.sb_disk_name, name, name_len * sizeof(char16_t));
 
-	int16_t ino_per_block = p_blocksize / VAL_BE16(sb.sb_inodesize);
-	if ((uint64_t)ino_per_block * VAL_BE16(sb.sb_inodesize) != p_blocksize) {
+	int16_t ino_per_block = p_blocksize / GOFS_BE16(sb.sb_inodesize);
+	if ((uint64_t)ino_per_block * GOFS_BE16(sb.sb_inodesize) != p_blocksize) {
 		printf("ERROR: block size not a multiple of inode size");
 		return -EINVAL;
 	}
@@ -101,7 +91,7 @@ int Vfs_GoFS::format(const char16_t *name, size_t name_len) {
 
 	printf("number of ag: %ld\n", number_of_ag);
 
-	sb.sb_next_ag = VAL_BE32(number_of_ag);
+	sb.sb_next_ag = GOFS_BE32(number_of_ag);
 
 	// create_ag() will write sb to disk, meaning we shouldn't modify this anymore after here
 
@@ -163,25 +153,25 @@ void Vfs_GoFS::create_ag(uint32_t ag_num, gofs_blk_t start_block, gofs_blk_t len
 		// need journal
 		if (sb.sb_journal_length) {
 			sb.sb_journal_start = reserved;
-			reserved += VAL_BE64(sb.sb_journal_length);
+			reserved += GOFS_BE64(sb.sb_journal_length);
 		}
 		sb.ag.ag_magic = GOFS_AG_HEADER_MAGIC;
 		sb.ag.ag_num = 0; // root ag
-		sb.ag.ag_free_blocks = VAL_BE64(length - reserved);
-		sb.ag.ag_rsvd_blocks = VAL_BE64(reserved);
-		sb.ag.ag_this = VAL_BE64(start_block);
-		sb.ag.ag_next = VAL_BE64(next);
-		sb.ag.ag_length = VAL_BE32(length);
+		sb.ag.ag_free_blocks = GOFS_BE32(length - reserved);
+		sb.ag.ag_rsvd_blocks = GOFS_BE32(reserved);
+		sb.ag.ag_this = GOFS_BE64(start_block);
+		sb.ag.ag_next = GOFS_BE64(next);
+		sb.ag.ag_length = GOFS_BE32(length);
 
 		write_block(start_block, (char*)&sb, sizeof(sb));
 	} else {
 		ag.ag_magic = GOFS_AG_HEADER_MAGIC;
-		ag.ag_num = VAL_BE32(ag_num);
-		ag.ag_free_blocks = VAL_BE32(length - reserved);
-		ag.ag_rsvd_blocks = VAL_BE64(reserved);
-		ag.ag_this = VAL_BE64(start_block);
-		ag.ag_next = VAL_BE64(next);
-		ag.ag_length = VAL_BE32(length);
+		ag.ag_num = GOFS_BE32(ag_num);
+		ag.ag_free_blocks = GOFS_BE32(length - reserved);
+		ag.ag_rsvd_blocks = GOFS_BE32(reserved);
+		ag.ag_this = GOFS_BE64(start_block);
+		ag.ag_next = GOFS_BE64(next);
+		ag.ag_length = GOFS_BE32(length);
 
 		write_block(start_block, (char*)&ag, sizeof(ag));
 	}
@@ -219,7 +209,7 @@ void Vfs_GoFS::ag_dirty(uint32_t ag_n) {
 		return;
 	}
 	auto ag = ag_map.find(ag_n)->second->ag;
-	write_block(VAL_BE64(ag->ag_this), (char*)ag, sizeof(*ag));
+	write_block(GOFS_BE64(ag->ag_this), (char*)ag, sizeof(*ag));
 }
 
 void Vfs_GoFS::write_block(gofs_blk_t block, char *buf, size_t buf_size) {
@@ -237,7 +227,7 @@ void Vfs_GoFS::read_block(gofs_blk_t block, char *buf, size_t buf_size) {
 
 void Vfs_GoFS::read_bitmap(gofs_ag_info_t*info) {
 	// compute bitmap length
-	auto div_res = ldiv(VAL_BE32(info->ag->ag_length), 4);
+	auto div_res = ldiv(GOFS_BE32(info->ag->ag_length), 4);
 	int64_t bitmap_size = div_res.quot + (div_res.rem?1:0);
 	div_res = ldiv(bitmap_size, p_blocksize);
 	int64_t bitmap_size_blocks = div_res.quot + (div_res.rem?1:0);
@@ -246,7 +236,7 @@ void Vfs_GoFS::read_bitmap(gofs_ag_info_t*info) {
 	info->bitmap = (char*)malloc(bitmap_size_blocks * p_blocksize);
 
 	// read blocks
-	read_block(VAL_BE64(info->ag->ag_this)+1, info->bitmap, bitmap_size_blocks * p_blocksize);
+	read_block(GOFS_BE64(info->ag->ag_this)+1, info->bitmap, bitmap_size_blocks * p_blocksize);
 }
 
 void Vfs_GoFS::bitmap_dirty(gofs_ag_info_t*info, uint32_t pos) {
@@ -255,7 +245,7 @@ void Vfs_GoFS::bitmap_dirty(gofs_ag_info_t*info, uint32_t pos) {
 	uint32_t pos_in_bitmap = pos/4;
 	uint32_t block_in_bitmap = pos_in_bitmap / p_blocksize;
 
-	write_block(VAL_BE64(info->ag->ag_this)+1+block_in_bitmap, info->bitmap + (block_in_bitmap*p_blocksize), p_blocksize);
+	write_block(GOFS_BE64(info->ag->ag_this)+1+block_in_bitmap, info->bitmap + (block_in_bitmap*p_blocksize), p_blocksize);
 }
 
 int Vfs_GoFS::mount() {
@@ -267,8 +257,8 @@ int Vfs_GoFS::mount() {
 
 	ag_map.clear(); // TODO free values
 
-	p_blocksize = VAL_BE32(sb.sb_blocksize);
-	p_inodesize = VAL_BE16(sb.sb_inodesize);
+	p_blocksize = GOFS_BE32(sb.sb_blocksize);
+	p_inodesize = GOFS_BE16(sb.sb_inodesize);
 
 	auto ag = &sb.ag;
 	auto info = (gofs_ag_info_t*)malloc(sizeof(gofs_ag_info_t));
@@ -279,7 +269,7 @@ int Vfs_GoFS::mount() {
 	ag_map.insert({0, info});
 
 	while(ag->ag_next) {
-		gofs_blk_t loc = VAL_BE64(ag->ag_next);
+		gofs_blk_t loc = GOFS_BE64(ag->ag_next);
 		ag = (gofs_ag_t*)malloc(sizeof(gofs_ag_t));
 		read_block(loc, (char*)ag, sizeof(gofs_ag_t));
 		if (ag->ag_magic != GOFS_AG_HEADER_MAGIC) {
@@ -289,7 +279,7 @@ int Vfs_GoFS::mount() {
 		info = (gofs_ag_info_t*)malloc(sizeof(gofs_ag_info_t));
 		info->ag = ag;
 		read_bitmap(info);
-		ag_map.insert({VAL_BE32(ag->ag_num), info});
+		ag_map.insert({GOFS_BE32(ag->ag_num), info});
 	}
 	printf("mount success, found %lu ag\n", ag_map.size());
 
@@ -312,9 +302,9 @@ uint64_t Vfs_GoFS::store_inode(gofs_in_t*inode, uint32_t target_ag) {
 		target_ag = 0;
 		uint32_t last_ag_avail = 0;
 		for(auto it : ag_map) {
-			if (VAL_BE64(it.second->ag->ag_free_blocks) > last_ag_avail) {
+			if (GOFS_BE32(it.second->ag->ag_free_blocks) > last_ag_avail) {
 				target_ag = it.first;
-				last_ag_avail = VAL_BE64(it.second->ag->ag_free_blocks);
+				last_ag_avail = GOFS_BE32(it.second->ag->ag_free_blocks);
 			}
 			break;
 		}
@@ -322,10 +312,10 @@ uint64_t Vfs_GoFS::store_inode(gofs_in_t*inode, uint32_t target_ag) {
 	// OK, so we store in target_ag
 	auto info = ag_map.find(target_ag)->second;
 
-//	gofs_blk_t start = VAL_BE64(ag->ag_this);
-	uint32_t pos = VAL_BE32(info->ag->ag_ino_alloc_pos);
+//	gofs_blk_t start = GOFS_BE64(ag->ag_this);
+	uint32_t pos = GOFS_BE32(info->ag->ag_ino_alloc_pos);
 	uint32_t max_pos = pos-1;
-	uint32_t length = VAL_BE32(info->ag->ag_length);
+	uint32_t length = GOFS_BE32(info->ag->ag_length);
 	if (length == 0) return 0;
 
 	// search in bitmap
@@ -333,7 +323,7 @@ uint64_t Vfs_GoFS::store_inode(gofs_in_t*inode, uint32_t target_ag) {
 		if (pos >= length) pos = 0;
 
 		auto status = bits_get(info->bitmap, pos);
-//		printf("testing at pos %u/%u : %d\n", pos, VAL_BE32(info->ag->ag_length), status);
+//		printf("testing at pos %u/%u : %d\n", pos, GOFS_BE32(info->ag->ag_length), status);
 		if ((status == GOFS_BLOCK_FREE) || (status == GOFS_BLOCK_PART)) {
 			// OK, we can store an inode there
 			gofs_in_t *block = (gofs_in_t*)malloc(p_blocksize);
@@ -343,7 +333,7 @@ uint64_t Vfs_GoFS::store_inode(gofs_in_t*inode, uint32_t target_ag) {
 				memset(block, 0, p_blocksize);
 			}
 
-			int inodes_per_block = p_blocksize / VAL_BE16(sb.sb_inodesize);
+			int inodes_per_block = p_blocksize / GOFS_BE16(sb.sb_inodesize);
 			int inodes_present = 0;
 			bool inode_copied = false;
 			uint64_t res_inode_num = 0;
@@ -363,16 +353,20 @@ uint64_t Vfs_GoFS::store_inode(gofs_in_t*inode, uint32_t target_ag) {
 			}
 
 			if (inodes_present == inodes_per_block) {
+				info->ag->ag_part_blocks = GOFS_BE32(GOFS_BE32(info->ag->ag_part_blocks) - 1);
+				info->ag->ag_full_blocks = GOFS_BE32(GOFS_BE32(info->ag->ag_full_blocks) + 1);
 				bits_set(info->bitmap, pos, GOFS_BLOCK_FULL);
 				bitmap_dirty(info, pos);
 			} else if (status == GOFS_BLOCK_FREE) {
+				info->ag->ag_free_blocks = GOFS_BE32(GOFS_BE32(info->ag->ag_free_blocks) - 1);
+				info->ag->ag_part_blocks = GOFS_BE32(GOFS_BE32(info->ag->ag_part_blocks) + 1);
 				bits_set(info->bitmap, pos, GOFS_BLOCK_PART);
 				bitmap_dirty(info, pos);
 			}
 
 			write_block(pos, (char*)block, p_blocksize);
 
-			info->ag->ag_ino_alloc_pos = VAL_BE32(pos);
+			info->ag->ag_ino_alloc_pos = GOFS_BE32(pos);
 			ag_dirty(target_ag);
 			return res_inode_num;
 		}
@@ -380,8 +374,12 @@ uint64_t Vfs_GoFS::store_inode(gofs_in_t*inode, uint32_t target_ag) {
 		pos += 1;
 	}
 
-	info->ag->ag_ino_alloc_pos = VAL_BE32(pos);
+	info->ag->ag_ino_alloc_pos = GOFS_BE32(pos);
 	ag_dirty(target_ag);
 	return 0; // in progress
+}
+
+const gofs_sb_t *Vfs_GoFS::superBlock() const {
+	return &sb;
 }
 
