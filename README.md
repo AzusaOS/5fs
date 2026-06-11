@@ -53,9 +53,33 @@ requirement. The 2015 C++ prototype (legacy format,
 
 ```
 make            # cargo build --release, tools appear in bin/ with dotted names
-make test       # unit + end-to-end tests
+make test       # unit + e2e + model + crash + compliance tests
+make stress     # heavy suites: 200k files, dir limits, churn, long model runs
+make fixtures   # regenerate the committed reference image (format changes only)
 make install    # install mkfs.5fs fsck.5fs debugfs.5fs mount.5fs to /usr/local/sbin
 ```
+
+## Testing
+
+* **e2e** (`tests/e2e.rs`) — every feature path: formats, sparse trees,
+  hashed directories, truncate, resize, journal replay, kernel region.
+* **model** (`tests/model.rs`) — seeded random op streams applied to the
+  filesystem and an in-memory model in lockstep; any divergence in
+  success/failure or content fails, then fsck must be clean. Reproduce a
+  failure with `cargo run --example modeldbg <seed>`.
+* **crash** (`tests/crash.rs`) — the device layer records every write with
+  its sync epoch; hundreds of simulated power-cut states (epoch prefixes,
+  unordered in-epoch subsets, torn blocks) must each recover via journal
+  replay + superblock self-heal to a clean, prefix-consistent state.
+* **compliance** (`tests/compliance.rs` + `fixtures/`) — a committed
+  reference image with a manifest: current code must read everything a
+  past build wrote, and raw byte-level checks pin the format itself
+  (magics, offsets, independently recomputed checksums, kernel
+  contiguity).
+* **stress** (`tests/stress.rs`, `make stress`) — 200,000 files over a
+  three-level tree with full fsck, a directory pushed to the depth limit
+  and torn back down, create/delete churn watching for block leaks, and
+  terabyte-offset sparse files.
 
 Cargo forbids `.` in binary target names, so `cargo build` produces
 `mkfs5fs` etc.; the Makefile copies them to their proper names

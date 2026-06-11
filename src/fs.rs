@@ -15,23 +15,64 @@ pub struct Gofs {
     pub dev: Device,
     pub sb: Superblock,
     pub map: AgMap,
+    /// In-memory allocator scan hints per AG: (arena block, L0 cell). Pure
+    /// optimization — scans wrap around, so a stale hint only costs time.
+    pub hints: std::collections::HashMap<u32, (u32, u64)>,
 }
 
 impl Gofs {
     pub fn open(path: &Path, writable: bool) -> Result<Self> {
         let dev = Device::open(path, writable)?;
-        let mut sbbuf = [0u8; SB_SIZE];
-        dev.pread(&mut sbbuf, 0)?;
-        let sb = Superblock::parse(&sbbuf).map_err(|e| anyhow!(e))?;
+        let (sb, from_backup) = Self::find_superblock(&dev)?;
         let map = Self::load_agmap(&dev, &sb)?.0;
-        let mut fs = Gofs { dev, sb, map };
+        let mut fs = Gofs { dev, sb, map, hints: Default::default() };
         if writable {
+            if from_backup {
+                eprintln!("5fs: primary superblock invalid; recovered from backup");
+                fs.write_superblock()?; // self-heal both copies
+            } else if !fs.backup_superblock_ok() {
+                fs.write_superblock()?; // heal a torn/stale backup
+            }
             let n = fs.replay()?;
             if n > 0 {
                 eprintln!("5fs: replayed {n} journal transaction(s)");
             }
         }
         Ok(fs)
+    }
+
+    /// Read the primary superblock, falling back to the backup copy. The
+    /// backup lives in the last block of AG 0, found by probing the AG 0
+    /// header (block 1) at each candidate block size.
+    pub fn find_superblock(dev: &Device) -> Result<(Superblock, bool)> {
+        let mut sbbuf = [0u8; SB_SIZE];
+        dev.pread(&mut sbbuf, 0)?;
+        match Superblock::parse(&sbbuf) {
+            Ok(sb) => Ok((sb, false)),
+            Err(primary_err) => {
+                for bs in [2048u64, 4096, 8192, 16384, 32768, 65536] {
+                    let mut h = vec![0u8; AGHDR_SIZE];
+                    if dev.pread(&mut h, bs).is_err() {
+                        continue;
+                    }
+                    let Ok(hdr) = AgHeader::parse(&h) else { continue };
+                    if hdr.ag_num != 0 {
+                        continue;
+                    }
+                    let off = (hdr.length as u64 - 1) * bs;
+                    let mut bak = [0u8; SB_SIZE];
+                    if dev.pread(&mut bak, off).is_err() {
+                        continue;
+                    }
+                    if let Ok(sb) = Superblock::parse(&bak) {
+                        if sb.blocksize as u64 == bs {
+                            return Ok((sb, true));
+                        }
+                    }
+                }
+                Err(anyhow!("{primary_err}; backup superblock not found either"))
+            }
+        }
     }
 
     /// Load both AG map copies; return the one with the highest valid
@@ -116,6 +157,20 @@ impl Gofs {
             buf.extend_from_slice(&self.read_block(blk_addr(hdr.ag_num, hdr.alloc_root + i))?);
         }
         Ok(buf)
+    }
+
+    /// True if the backup superblock parses and matches the primary's
+    /// generation.
+    fn backup_superblock_ok(&self) -> bool {
+        let Some(s) = self.map.entries.first().and_then(|e| e.segs.first()) else {
+            return true;
+        };
+        let off = s.dev_offset + (s.blocks as u64 - 1) * self.sb.blocksize as u64;
+        let mut bak = [0u8; SB_SIZE];
+        if self.dev.pread(&mut bak, off).is_err() {
+            return false;
+        }
+        matches!(Superblock::parse(&bak), Ok(b) if b.uuid == self.sb.uuid && b.gen == self.sb.gen)
     }
 
     pub fn write_superblock(&mut self) -> Result<()> {
@@ -573,6 +628,14 @@ impl Gofs {
                 if ei.flags & INODE_FLAG_IMMUTABLE != 0 {
                     bail!("{n2}: immutable file");
                 }
+                // POSIX: a directory may only replace a directory, a
+                // non-directory only a non-directory
+                if ei.is_dir() != (ent.ftype == DT_DIR) {
+                    bail!(
+                        "{n2}: {}",
+                        if ei.is_dir() { "is a directory" } else { "not a directory" }
+                    );
+                }
                 if ei.is_dir() {
                     if self.dir_count(&t, &ei)? != 0 {
                         bail!("{n2}: directory not empty");
@@ -692,6 +755,11 @@ impl Gofs {
         self.rmdir_at(p, &n)
     }
     pub fn rename(&mut self, from: &str, to: &str) -> Result<()> {
+        let f = from.trim_matches('/');
+        let t = to.trim_matches('/');
+        if t == f || t.starts_with(&format!("{f}/")) {
+            bail!("cannot move a directory into itself");
+        }
         let (p1, n1) = self.resolve_parent(from)?;
         let (p2, n2) = self.resolve_parent(to)?;
         self.rename_at(p1, &n1, p2, &n2)

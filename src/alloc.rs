@@ -142,7 +142,16 @@ impl Gofs {
     fn tbl_alloc_rec(&mut self, t: &mut Txn, hdr: &mut AgHeader) -> Result<(u32, u16)> {
         let nrec = recs_per_block(self.sb.blocksize);
         if hdr.tbl_arena != 0 {
-            for b in hdr.tbl_arena..hdr.tbl_arena + CELL_BLOCKS {
+            let hint = self
+                .hints
+                .get(&hdr.ag_num)
+                .map(|h| h.0)
+                .filter(|h| (hdr.tbl_arena..hdr.tbl_arena + CELL_BLOCKS).contains(h))
+                .unwrap_or(hdr.tbl_arena);
+            for b in
+                wrap_range((hint - hdr.tbl_arena) as u64, CELL_BLOCKS as u64)
+                    .map(|o| hdr.tbl_arena + o as u32)
+            {
                 let blk = blk_addr(hdr.ag_num, b);
                 let raw = self.txn_read(t, blk)?;
                 let mut buf = if raw[0..4] == ALLOC_MAGIC {
@@ -162,6 +171,7 @@ impl Gofs {
                 let off = rec_off(idx);
                 buf[off..off + REC_SIZE].fill(0);
                 self.tbl_write(t, hdr.ag_num, b, buf);
+                self.hints.entry(hdr.ag_num).or_default().0 = b;
                 return Ok((b, idx));
             }
         }
@@ -172,6 +182,7 @@ impl Gofs {
             .ok_or_else(|| anyhow!("AG {}: no free cell for table arena", hdr.ag_num))?;
         self.rt_state_set(t, hdr, c, CELL_RSVD)?;
         hdr.tbl_arena = (c * CELL_BLOCKS as u64) as u32;
+        self.hints.entry(hdr.ag_num).or_default().0 = hdr.tbl_arena;
         hdr.free_blocks -= CELL_BLOCKS;
         hdr.rsvd_blocks += CELL_BLOCKS;
         self.sb.free_blocks -= CELL_BLOCKS as u64;
@@ -284,8 +295,9 @@ impl Gofs {
     /// Allocate `m` consecutive L1 cells (16 blocks each) inside one L0 cell.
     fn alloc_l1(&mut self, t: &mut Txn, hdr: &mut AgHeader, m: u32) -> Result<u64> {
         let (cells, _) = rt_geometry(hdr.length, self.sb.blocksize);
+        let hint = self.hints.get(&hdr.ag_num).map(|h| h.1).unwrap_or(0);
         // prefer an already-refined L0 with room (clustered refinement)
-        for c in 0..cells {
+        for c in wrap_range(hint, cells) {
             if self.rt_state(t, hdr, c)? != CELL_REFINED {
                 continue;
             }
@@ -297,6 +309,7 @@ impl Gofs {
                 }
                 self.rec_write(t, hdr.ag_num, r, &rec)?;
                 self.account_alloc(hdr, m * ALLOC_FANOUT);
+                self.hints.entry(hdr.ag_num).or_default().1 = c;
                 return Ok(blk_addr(
                     hdr.ag_num,
                     (c * CELL_BLOCKS as u64) as u32 + start * ALLOC_FANOUT,
@@ -320,8 +333,9 @@ impl Gofs {
     /// Allocate `n` (1..=16) consecutive single blocks inside one L1 cell.
     fn alloc_l2(&mut self, t: &mut Txn, hdr: &mut AgHeader, n: u32) -> Result<u64> {
         let (cells, _) = rt_geometry(hdr.length, self.sb.blocksize);
+        let hint = self.hints.get(&hdr.ag_num).map(|h| h.1).unwrap_or(0);
         // pass 1: an existing L2 record with a free run
-        for c in 0..cells {
+        for c in wrap_range(hint, cells) {
             if self.rt_state(t, hdr, c)? != CELL_REFINED {
                 continue;
             }
@@ -339,6 +353,7 @@ impl Gofs {
                     }
                     self.rec_write(t, hdr.ag_num, l1, &l1rec)?;
                     self.account_alloc(hdr, n);
+                    self.hints.entry(hdr.ag_num).or_default().1 = c;
                     return Ok(blk_addr(
                         hdr.ag_num,
                         (c * CELL_BLOCKS as u64) as u32 + i * ALLOC_FANOUT + start,
@@ -347,7 +362,7 @@ impl Gofs {
             }
         }
         // pass 2: refine a FREE L1 inside an existing refined L0
-        for c in 0..cells {
+        for c in wrap_range(hint, cells) {
             if self.rt_state(t, hdr, c)? != CELL_REFINED {
                 continue;
             }
@@ -361,6 +376,7 @@ impl Gofs {
                 }
                 self.rec_write(t, hdr.ag_num, l1, &l1rec)?;
                 self.account_alloc(hdr, n);
+                self.hints.entry(hdr.ag_num).or_default().1 = c;
                 return Ok(blk_addr(
                     hdr.ag_num,
                     (c * CELL_BLOCKS as u64) as u32 + i * ALLOC_FANOUT,
@@ -613,6 +629,12 @@ impl Gofs {
         let buf = self.txn_read(t, blk_addr(ag, Self::ag_header_block(ag)))?;
         AgHeader::parse(&buf).map_err(|e| anyhow!("AG {ag}: {e}"))
     }
+}
+
+/// Wrap-around scan order starting at `start` (covers every index once).
+pub fn wrap_range(start: u64, len: u64) -> impl Iterator<Item = u64> {
+    let start = if len == 0 { 0 } else { start % len };
+    (start..len).chain(0..start)
 }
 
 /// Find a run of `m` consecutive FREE children in a record.

@@ -276,7 +276,7 @@ fn resize_grow_relocate_shrink() {
 }
 
 #[test]
-fn corruption_detected() {
+fn corruption_detected_and_healed() {
     let dir = tempfile::tempdir().unwrap();
     let img = fresh(&dir, "c.img", 32);
     use std::io::{Read, Seek, SeekFrom, Write};
@@ -288,7 +288,15 @@ fn corruption_detected() {
     f.seek(SeekFrom::Start(100)).unwrap();
     f.write_all(&b).unwrap();
     drop(f);
-    assert!(gofs::fsck::check(&img).is_err(), "corrupt superblock must not parse");
+    // read-only fsck recovers via the backup but flags the damage
+    let r = gofs::fsck::check(&img).unwrap();
+    assert!(!r.clean(), "corrupt primary superblock must be reported");
+    assert!(r.errors.iter().any(|e| e.contains("primary superblock")), "{:?}", r.errors);
+    // a writable open self-heals both copies
+    {
+        let _fs = Gofs::open(&img, true).unwrap();
+    }
+    assert_clean(&img, "superblock self-heal");
 }
 
 #[test]

@@ -189,12 +189,13 @@ impl Gofs {
         fblock: u64,
         n: u64,
     ) -> Result<Vec<(u64, u64, u64, bool)>> {
+        let mut fresh = Vec::new();
         if inode.format == FMT_EXTENT {
-            self.extent_ensure(t, ag, inode, fblock, n)?;
+            self.extent_ensure(t, ag, inode, fblock, n, &mut fresh)?;
         }
         if inode.format == FMT_EXTENT {
             // still inline after ensure: collect runs from the records
-            return self.collect_runs(t, inode, fblock, n, &[]);
+            return self.collect_runs(t, inode, fblock, n, &fresh);
         }
         if inode.format != FMT_TREE {
             // EMPTY (or EMBED already lifted by the caller): start inline
@@ -206,7 +207,6 @@ impl Gofs {
         while fblock + n > ROOT_FANOUT as u64 * cov(root_level(&inode.payload)) {
             self.root_grow(t, ag, inode)?;
         }
-        let mut fresh = Vec::new();
         let level = root_level(&inode.payload);
         let c = cov(level);
         let mut pos = fblock;
@@ -372,6 +372,8 @@ impl Gofs {
     // --- inline extents ---------------------------------------------------------------------
 
     /// Ensure on the inline-extent format; converts to TREE on overflow.
+    /// Newly allocated ranges are reported through `fresh` so the caller
+    /// never read-modify-writes uninitialized blocks.
     fn extent_ensure(
         &mut self,
         t: &mut Txn,
@@ -379,6 +381,7 @@ impl Gofs {
         inode: &mut Inode,
         fblock: u64,
         n: u64,
+        fresh: &mut Vec<(u64, u64)>,
     ) -> Result<()> {
         let mut extents = extents_parse(&inode.payload);
         let mut pos = fblock;
@@ -402,6 +405,7 @@ impl Gofs {
             // try to extend the extent ending exactly at pos, else add one
             match self.alloc_extent(t, ag, want) {
                 Ok(blk) => {
+                    fresh.push((pos, want));
                     let merged = extents.iter_mut().any(|e| {
                         if e.file_block + e.blocks as u64 == pos && e.blk + e.blocks as u64 == blk
                         {

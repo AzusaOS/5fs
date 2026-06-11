@@ -17,6 +17,15 @@ build:
 test:
 	cargo test
 
+# Heavy suites (200k files, long model runs) — minutes, not seconds.
+stress:
+	cargo test --release -- --ignored --nocapture --test-threads=2
+
+# Regenerate the committed reference image + manifest (after intentional
+# format changes only; compliance tests verify against these).
+fixtures:
+	GEN_FIXTURES=1 cargo test --release --test compliance generate_fixture -- --ignored --nocapture
+
 install: build
 	install -d $(DESTDIR)$(SBINDIR)
 	@for t in $(TOOLS); do \

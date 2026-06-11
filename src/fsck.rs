@@ -35,6 +35,14 @@ impl Report {
 pub fn check(path: &Path) -> Result<Report> {
     let mut r = Report::default();
     let gofs = Gofs::open(path, false)?;
+    {
+        // the open may have silently used the backup; report primary damage
+        let mut raw = [0u8; SB_SIZE];
+        gofs.dev.pread(&mut raw, 0)?;
+        if let Err(e) = Superblock::parse(&raw) {
+            r.err(format!("primary superblock: {e} (recovered from backup; mount rw to heal)"));
+        }
+    }
     let sb = &gofs.sb;
     r.info.push(format!(
         "superblock: v2, blocksize {}, inodesize {}, label \"{}\", gen {}",
