@@ -1,0 +1,37 @@
+[package]
+name = "gofs"
+version = "0.1.0"
+edition = "2021"
+description = "5FS (GoFS) filesystem — library and tool suite (mkfs.5fs, fsck.5fs, debugfs.5fs, mount.5fs)"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crc32c = "0.6"
+uuid = { version = "1", features = ["v4"] }
+fuser = { version = "0.15", optional = true }
+libc = { version = "0.2", optional = true }
+
+[features]
+default = ["fuse"]
+fuse = ["dep:fuser", "dep:libc"]
+
+[[bin]]
+name = "mkfs5fs"
+path = "src/bin/mkfs5fs.rs"
+
+[[bin]]
+name = "fsck5fs"
+path = "src/bin/fsck5fs.rs"
+
+[[bin]]
+name = "debugfs5fs"
+path = "src/bin/debugfs5fs.rs"
+
+[[bin]]
+name = "mount5fs"
+path = "src/bin/mount5fs.rs"
+required-features = ["fuse"]
+
+[dev-dependencies]
+tempfile = "3"

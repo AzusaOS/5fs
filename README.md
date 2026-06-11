@@ -18,9 +18,34 @@ load it with raw block reads and no filesystem driver.
 
 ## Status
 
-Design phase. The specification in `doc/` is format v2 (2026). The code in
-this repository is the 2015 prototype and implements the legacy format
-([doc/legacy-2015.md](doc/legacy-2015.md)); it will be rewritten against v2.
+The specification in `doc/` is format v2 (2026). The Rust implementation
+(`gofs` library plus tools) covers a v0 subset of v2: mkfs, structural fsck,
+image inspection and offline import via debugfs, and read-only FUSE mounting.
+The refinement-tree allocator currently operates on whole level-0 cells;
+refinement below that, extent trees, hashed directories, and the journal
+write path are not implemented yet. The 2015 C++ prototype (legacy format,
+[doc/legacy-2015.md](doc/legacy-2015.md)) has been removed.
+
+## Building
+
+```
+make            # cargo build --release, tools appear in bin/ with dotted names
+make test       # unit + end-to-end tests
+make install    # install mkfs.5fs fsck.5fs debugfs.5fs mount.5fs to /usr/local/sbin
+```
+
+Cargo forbids `.` in binary target names, so `cargo build` produces
+`mkfs5fs` etc.; the Makefile copies them to their proper names
+(`mkfs.5fs`, `fsck.5fs`, `debugfs.5fs`, `mount.5fs`).
+
+```
+mkfs.5fs disk.img --size 256M -L mylabel
+fsck.5fs disk.img
+debugfs.5fs disk.img sb | agmap | ag 0 | ls | inode 0x30 | scan
+debugfs.5fs disk.img import hostfile.bin name.bin
+debugfs.5fs disk.img cat name.bin
+mount.5fs disk.img /mnt/point    # read-only; needs FUSE (macFUSE on macOS)
+```
 
 ## Specification
 
