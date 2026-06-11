@@ -7,9 +7,9 @@
 //! `addr`, the rest of the child range being a hole), or REFINED (a child
 //! node one level down).
 //!
-//! v1 limits: truncation frees whole children only — a partially retained
-//! FULL run keeps its allocation until the file is deleted (logical EOF is
-//! `in_size`). Requires blocksize >= 2048 for node blocks.
+//! Truncation frees whole children beyond the cutoff and trims straddling
+//! runs at allocation-granule boundaries; emptied nodes coarsen away.
+//! Requires blocksize >= 2048 for node blocks.
 
 use crate::fmt::*;
 use crate::fs::Gofs;
@@ -621,18 +621,150 @@ impl Gofs {
         Ok(())
     }
 
-    fn free_child(&mut self, t: &mut Txn, state: u8, blocks: u64, addr: u64) -> Result<()> {
+    /// Returns the number of data blocks freed (node blocks not counted —
+    /// they were never in `in_nblocks`).
+    fn free_child(&mut self, t: &mut Txn, state: u8, blocks: u64, addr: u64) -> Result<u64> {
         match state {
-            CELL_FREE => Ok(()),
-            CELL_FULL => self.free_extent(t, addr, blocks),
+            CELL_FREE => Ok(0),
+            CELL_FULL => {
+                self.free_extent(t, addr, blocks)?;
+                Ok(blocks)
+            }
             CELL_REFINED => {
                 let buf = self.node_read(t, addr)?;
+                let mut freed = 0;
                 for i in 0..NODE_FANOUT as usize {
                     let st = node_state(&buf, i);
                     let (b, a) = node_child(&buf, i);
-                    self.free_child(t, st, b as u64, a)?;
+                    freed += self.free_child(t, st, b as u64, a)?;
                 }
-                self.free_extent(t, addr, 1) // the node block itself
+                self.free_extent(t, addr, 1)?; // the node block itself
+                Ok(freed)
+            }
+            s => bail!("bad child state {s}"),
+        }
+    }
+
+    // --- truncate (partial reclamation) ----------------------------------------------------
+
+    /// Free the mapping beyond `cutoff` file blocks: whole children beyond
+    /// the cutoff, and the granule-aligned suffix of a straddling run. Kept
+    /// slack inside the last granule is zeroed by the caller. Returns data
+    /// blocks freed.
+    pub fn map_truncate(&mut self, t: &mut Txn, inode: &mut Inode, cutoff: u64) -> Result<u64> {
+        let mut freed = 0u64;
+        match inode.format {
+            FMT_EMPTY | FMT_EMBED => {}
+            FMT_EXTENT => {
+                let mut keep = Vec::new();
+                for e in extents_parse(&inode.payload) {
+                    if e.file_block >= cutoff {
+                        self.free_extent(t, e.blk, e.blocks as u64)?;
+                        freed += e.blocks as u64;
+                    } else if e.file_block + e.blocks as u64 > cutoff {
+                        let kept = self.trim_run(t, e.blk, e.blocks as u64, cutoff - e.file_block, &mut freed)?;
+                        keep.push(Extent { file_block: e.file_block, blk: e.blk, blocks: kept as u32 });
+                    } else {
+                        keep.push(e);
+                    }
+                }
+                extents_store(&mut inode.payload, &keep).map_err(|e| anyhow!(e))?;
+            }
+            FMT_TREE => {
+                let level = root_level(&inode.payload);
+                let c = cov(level);
+                let mut p = inode.payload;
+                for i in 0..ROOT_FANOUT {
+                    let st = root_state(&p, i);
+                    let (blocks, addr) = root_child(&p, i);
+                    if let Some((nst, nb, na)) =
+                        self.trim_child(t, st, blocks as u64, addr, level, i as u64 * c, cutoff, &mut freed)?
+                    {
+                        root_state_set(&mut p, i, nst);
+                        root_child_set(&mut p, i, nb as u32, na);
+                    }
+                }
+                inode.payload = p;
+            }
+            f => bail!("format {f}: cannot truncate"),
+        }
+        Ok(freed)
+    }
+
+    /// Trim a FULL run to at least `keep` blocks, freeing the suffix at the
+    /// allocation-granule boundary. Returns the kept length.
+    fn trim_run(&mut self, t: &mut Txn, addr: u64, blocks: u64, keep: u64, freed: &mut u64) -> Result<u64> {
+        if keep >= blocks {
+            return Ok(blocks);
+        }
+        let g = self.granule_at(t, addr)?;
+        let keep_r = (keep.div_ceil(g) * g).min(blocks);
+        if keep_r < blocks {
+            self.free_extent(t, addr + keep_r, blocks - keep_r)?;
+            *freed += blocks - keep_r;
+        }
+        Ok(keep_r)
+    }
+
+    /// Returns Some(new child rec) if the child changed.
+    #[allow(clippy::too_many_arguments)]
+    fn trim_child(
+        &mut self,
+        t: &mut Txn,
+        st: u8,
+        blocks: u64,
+        addr: u64,
+        level: u8,
+        child_start: u64,
+        cutoff: u64,
+        freed: &mut u64,
+    ) -> Result<Option<(u8, u64, u64)>> {
+        let c = cov(level);
+        if child_start >= cutoff {
+            if st == CELL_FREE {
+                return Ok(None);
+            }
+            *freed += self.free_child(t, st, blocks, addr)?;
+            return Ok(Some((CELL_FREE, 0, 0)));
+        }
+        if child_start + c <= cutoff {
+            return Ok(None); // fully kept
+        }
+        match st {
+            CELL_FREE => Ok(None),
+            CELL_FULL => {
+                let kept = self.trim_run(t, addr, blocks, cutoff - child_start, freed)?;
+                if kept != blocks {
+                    Ok(Some((CELL_FULL, kept, addr)))
+                } else {
+                    Ok(None)
+                }
+            }
+            CELL_REFINED => {
+                let mut buf = self.node_read(t, addr)?;
+                let nl = node_level(&buf);
+                let nc = cov(nl);
+                let mut changed = false;
+                for i in 0..NODE_FANOUT as usize {
+                    let cst = node_state(&buf, i);
+                    let (b, a) = node_child(&buf, i);
+                    if let Some((nst, nb, na)) =
+                        self.trim_child(t, cst, b as u64, a, nl, child_start + i as u64 * nc, cutoff, freed)?
+                    {
+                        node_state_set(&mut buf, i, nst);
+                        node_child_set(&mut buf, i, nb as u32, na);
+                        changed = true;
+                    }
+                }
+                if (0..NODE_FANOUT as usize).all(|i| node_state(&buf, i) == CELL_FREE) {
+                    // coarsen: the node emptied
+                    self.free_extent(t, addr, 1)?;
+                    return Ok(Some((CELL_FREE, 0, 0)));
+                }
+                if changed {
+                    self.node_write(t, addr, buf);
+                }
+                Ok(None)
             }
             s => bail!("bad child state {s}"),
         }

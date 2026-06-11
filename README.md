@@ -37,11 +37,17 @@ Rust library and tools:
 * **fsck** — validates every structure above, tallies the allocator
   against counters, walks the namespace verifying nlinks and mappings.
 
-Deferred (tracked in the docs): allocator L3 inode-slot refinement, bucket
-buddy-merge, sub-child truncate reclamation, CoW (open decision,
-[doc/6-journal.md](doc/6-journal.md)), kernel boot region tooling. The 2015
-C++ prototype (legacy format, [doc/legacy-2015.md](doc/legacy-2015.md)) has
-been removed.
+Also implemented: allocator L3 inode-slot refinement (inodes are fully
+allocator-tracked), directory bucket buddy-merge with a freed-bucket
+freelist, granule-aligned truncate reclamation, and the **kernel boot
+region** — `mkfs.5fs --kernel image` stores the kernel physically
+contiguous, raw-readable by a bootloader at `sb_kernel_offset`, visible as
+an immutable `/kernel.bin`, replaceable via `debugfs.5fs kernel-update`.
+
+The one open decision is CoW vs journaled write-in-place
+([doc/6-journal.md](doc/6-journal.md)) — gated on snapshots becoming a 5OS
+requirement. The 2015 C++ prototype (legacy format,
+[doc/legacy-2015.md](doc/legacy-2015.md)) has been removed.
 
 ## Building
 
@@ -56,7 +62,7 @@ Cargo forbids `.` in binary target names, so `cargo build` produces
 (`mkfs.5fs`, `fsck.5fs`, `debugfs.5fs`, `mount.5fs`).
 
 ```
-mkfs.5fs disk.img --size 256M -L mylabel
+mkfs.5fs disk.img --size 256M -L mylabel [--kernel kernel.bin]
 fsck.5fs disk.img
 debugfs.5fs disk.img sb | agmap | ag 0 | inode 0x30 | scan | journal
 debugfs.5fs disk.img ls /some/dir
@@ -64,6 +70,7 @@ debugfs.5fs disk.img import hostfile.bin /docs/name.bin
 debugfs.5fs disk.img cat /docs/name.bin
 debugfs.5fs disk.img mkdir /d | rm /f | rmdir /d | mv /a /b | symlink /l target
 debugfs.5fs disk.img grow 512M | shrink 256M | relocate 2 0x4000000 | retire 1
+debugfs.5fs disk.img kernel-update new-kernel.bin
 mount.5fs disk.img /mnt/point    # read-write; needs FUSE (macFUSE on macOS)
 ```
 

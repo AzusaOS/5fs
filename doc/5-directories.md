@@ -79,7 +79,13 @@ but keep their hash). Exact cookie encoding is pinned at format freeze.
 
 ## Implementation notes (v1)
 
-* Bucket buddy-merge is deferred; a directory that empties completely
-  collapses to FMT_EMPTY and frees its blocks.
+* Buddy-merge is implemented: after a removal, a bucket and its buddy
+  (same local depth) that fit one block re-merge with `local_depth - 1`,
+  and the table halves whenever every slot pair agrees. Freed bucket
+  numbers go on a **freelist in the header block** (count at offset 18,
+  entries growing down from the block end) and are reused by later splits,
+  so the directory file does not grow while churning.
+* A directory that empties completely collapses to FMT_EMPTY and frees its
+  blocks.
 * Readdir currently returns name order (collected in memory), not
   hash-order cookies.

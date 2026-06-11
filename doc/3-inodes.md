@@ -26,7 +26,7 @@ payload.
 | `in_mode` | 2 | type + permission bits (standard `S_Ixxx`) |
 | `in_nlink` | 4 | |
 | `in_uid`, `in_gid` | 4 + 4 | |
-| `in_flags` | 4 | per-file flags (noatime, immutable, …) |
+| `in_flags` | 4 | per-file flags; bit 0 = IMMUTABLE (the boot kernel, see [1-layout.md](1-layout.md)) |
 | `in_gen` | 4 | NFS-style generation |
 | `in_size` | 8 | bytes |
 | `in_nblocks` | 8 | blocks in use (all granularities, in block units) |

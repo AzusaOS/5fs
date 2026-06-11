@@ -91,6 +91,7 @@ pub fn check(path: &Path) -> Result<Report> {
 
     check_allocator(&gofs, &mut r);
     check_namespace(&gofs, &mut r);
+    check_kernel(&gofs, &mut r);
     Ok(r)
 }
 
@@ -223,9 +224,18 @@ fn tally_ag(gofs: &Gofs, hdr: &AgHeader) -> Result<(u64, u64, u64, Vec<String>)>
                                     CELL_FREE => free += 1,
                                     CELL_RSVD => rsvd += 1,
                                     CELL_FULL => full += 1,
-                                    _ => errs.push(format!(
-                                        "cell {c}.{i}.{j}: L2 cell cannot be refined"
-                                    )),
+                                    _ => {
+                                        // L3: an inode slot block
+                                        full += 1;
+                                        let rf2 = crate::alloc::rec_ref(&l1rec, j);
+                                        let Some(l3rec) = read_rec(gofs, rf2, &mut errs) else {
+                                            continue;
+                                        };
+                                        let local = (c * CELL_BLOCKS as u64) as u32
+                                            + i * ALLOC_FANOUT
+                                            + j;
+                                        check_slot_block(gofs, hdr.ag_num, local, &l3rec, &mut errs);
+                                    }
                                 }
                             }
                         }
@@ -244,6 +254,74 @@ fn tally_ag(gofs: &Gofs, hdr: &AgHeader) -> Result<(u64, u64, u64, Vec<String>)>
         }
     }
     Ok((free, rsvd, full, errs))
+}
+
+/// L3 slot record vs the actual block: FULL slots must hold valid inodes,
+/// FREE slots must be zeroed.
+fn check_slot_block(gofs: &Gofs, ag: u32, local: u32, l3rec: &[u8; 128], errs: &mut Vec<String>) {
+    let isz = gofs.sb.inodesize as usize;
+    let slots = gofs.sb.blocksize as usize / isz;
+    let buf = match gofs.read_block(blk_addr(ag, local)) {
+        Ok(b) => b,
+        Err(e) => {
+            errs.push(format!("slot block {local}: {e}"));
+            return;
+        }
+    };
+    for s in 0..slots {
+        let chunk = &buf[s * isz..(s + 1) * isz];
+        match crate::alloc::rec_state(l3rec, s as u32) {
+            CELL_FULL => {
+                if let Err(e) = Inode::parse(chunk) {
+                    errs.push(format!("slot block {local} slot {s}: marked used but {e}"));
+                }
+            }
+            CELL_FREE => {
+                if !chunk.iter().all(|&b| b == 0) {
+                    errs.push(format!("slot block {local} slot {s}: marked free but not zeroed"));
+                }
+            }
+            st => errs.push(format!("slot block {local} slot {s}: bad state {st}")),
+        }
+    }
+}
+
+fn check_kernel(gofs: &Gofs, r: &mut Report) {
+    let sb = &gofs.sb;
+    if sb.kernel_offset == 0 {
+        return;
+    }
+    let len = sb.kernel_end.saturating_sub(sb.kernel_offset);
+    r.info.push(format!("kernel: {len} bytes at phys {:#x}", sb.kernel_offset));
+    let Some(seg) = gofs.map.entries.first().and_then(|e| e.segs.first()) else { return };
+    let ag0_end = seg.dev_offset + seg.blocks as u64 * sb.blocksize as u64;
+    if sb.kernel_offset < seg.dev_offset || sb.kernel_end > ag0_end {
+        r.err("kernel region lies outside AG 0's first segment");
+    }
+    match gofs.dir_lookup(sb.root_ino, "kernel.bin") {
+        Ok(Some(ino)) => match gofs.read_inode(ino) {
+            Ok(i) => {
+                if i.flags & INODE_FLAG_IMMUTABLE == 0 {
+                    r.err("kernel.bin: missing immutable flag");
+                }
+                if i.size != len {
+                    r.err(format!("kernel.bin: size {} != superblock kernel length {len}", i.size));
+                }
+                let ext = extents_parse(&i.payload);
+                match ext.first().and_then(|e| gofs.map.resolve(e.blk, sb.blocksize)) {
+                    Some(phys) if phys == sb.kernel_offset => {}
+                    Some(phys) => r.err(format!(
+                        "kernel.bin extent at phys {phys:#x} but superblock says {:#x}",
+                        sb.kernel_offset
+                    )),
+                    None => r.err("kernel.bin: extent unmapped"),
+                }
+            }
+            Err(e) => r.err(format!("kernel.bin: {e}")),
+        },
+        Ok(None) => r.err("kernel region exists but kernel.bin is missing from /"),
+        Err(e) => r.err(format!("kernel.bin lookup: {e}")),
+    }
 }
 
 fn check_namespace(gofs: &Gofs, r: &mut Report) {

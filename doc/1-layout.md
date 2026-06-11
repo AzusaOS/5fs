@@ -129,7 +129,10 @@ map is authoritative.
 `sb_kernel_offset` / `sb_kernel_end` give its physical location so a
 bootloader can load it with raw block reads — no filesystem parsing. The
 region lives in AG 0, which is IMMOVABLE, so the guarantee survives any
-resize or relocation. Installing or replacing the kernel rewrites the region
-and updates the superblock; the file is also reachable normally (e.g. as
-`/system/kernel.bin`) via an inode whose extents point at the reserved
-blocks (RSVD in the allocator).
+resize or relocation. The kernel is also reachable normally as
+`/kernel.bin`: an inode whose extent points at the reserved blocks (RSVD in
+the allocator) and which carries the IMMUTABLE inode flag — write, truncate
+and unlink refuse, and replacement goes through the dedicated kernel-update
+path (`debugfs.5fs kernel-update`), which rewrites the region in place and
+updates `sb_kernel_end`. The region's capacity is fixed at mkfs
+(`mkfs.5fs --kernel image`); a larger kernel needs a re-format.

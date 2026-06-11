@@ -37,6 +37,11 @@ pub const CELL_RSVD: u8 = 1;
 pub const CELL_FULL: u8 = 2;
 pub const CELL_REFINED: u8 = 3;
 
+// Inode flags
+/// File contents and identity are fixed (the boot kernel): write, truncate,
+/// and unlink refuse. Updated only via the dedicated kernel-update path.
+pub const INODE_FLAG_IMMUTABLE: u32 = 1;
+
 // Inode payload formats, doc/3-inodes.md
 pub const FMT_EMPTY: u8 = 1;
 pub const FMT_EMBED: u8 = 2;

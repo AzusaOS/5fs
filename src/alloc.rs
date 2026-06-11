@@ -12,10 +12,11 @@
 //! coarsens: a record whose children all return to FREE is released and the
 //! parent state collapses (the buddy merge).
 //!
-//! Inodes (v1): inode blocks are ordinary single-block allocations; free
-//! slots are recognized by being zeroed, and `ag_ino_hint` points at the
-//! block currently used for new inodes. (The spec's L3 slot refinement is
-//! not implemented yet.)
+//! Inodes: a slot block is an L2 cell refined one level further (L3): its
+//! L1 record child is REFINED and references a slot record whose 16 states
+//! track the inode slots. `ag_ino_hint` points at the slot block currently
+//! used for new inodes; an emptied slot block coarsens back to a free L2
+//! cell like any other refinement.
 
 use crate::fmt::*;
 use crate::fs::Gofs;
@@ -459,35 +460,94 @@ impl Gofs {
         self.sb.full_blocks -= blocks as u64;
     }
 
-    // --- inodes ----------------------------------------------------------------------------
+    // --- inodes (L3 slot refinement) ----------------------------------------------------
 
-    /// Allocate an inode slot, journaled. New inode blocks are single-block
-    /// allocations; free slots are zeroed.
+    /// Walk root table -> L0 -> L1 for a local block; return the L3 slot
+    /// record reference if the block is slot-refined, plus the L1 record
+    /// reference and child index for coarsening.
+    fn slot_rec_at(
+        &self,
+        t: &Txn,
+        hdr: &AgHeader,
+        local: u32,
+    ) -> Result<Option<((u32, u16), (u32, u16), u32)>> {
+        let c = (local / CELL_BLOCKS) as u64;
+        if self.rt_state(t, hdr, c)? != CELL_REFINED {
+            return Ok(None);
+        }
+        let l0 = self.rt_ref(t, hdr, c)?;
+        let l0rec = self.rec_read(t, hdr.ag_num, l0)?;
+        let i = (local % CELL_BLOCKS) / ALLOC_FANOUT;
+        if rec_state(&l0rec, i) != CELL_REFINED {
+            return Ok(None);
+        }
+        let l1 = rec_ref(&l0rec, i);
+        let l1rec = self.rec_read(t, hdr.ag_num, l1)?;
+        let j = local % ALLOC_FANOUT;
+        if rec_state(&l1rec, j) != CELL_REFINED {
+            return Ok(None);
+        }
+        Ok(Some((rec_ref(&l1rec, j), l1, j)))
+    }
+
+    /// Allocate an inode slot, journaled.
     pub fn alloc_inode(&mut self, t: &mut Txn, ag: u32) -> Result<u64> {
         let mut hdr = self.read_ag_header_txn(t, ag)?;
         let slots = self.sb.blocksize / self.sb.inodesize as u32;
         if hdr.ino_hint != 0 {
-            let blk = blk_addr(ag, hdr.ino_hint);
-            let buf = self.txn_read(t, blk)?;
-            for s in 0..slots {
-                let off = (s * self.sb.inodesize as u32) as usize;
-                if buf[off..off + self.sb.inodesize as usize].iter().all(|&b| b == 0) {
+            if let Some((l3, _, _)) = self.slot_rec_at(t, &hdr, hdr.ino_hint)? {
+                let mut l3rec = self.rec_read(t, ag, l3)?;
+                if let Some(s) = (0..slots).find(|&s| rec_state(&l3rec, s) == CELL_FREE) {
+                    rec_state_set(&mut l3rec, s, CELL_FULL);
+                    self.rec_write(t, ag, l3, &l3rec)?;
                     return Ok(ino_addr(ag, hdr.ino_hint * slots + s));
                 }
             }
         }
+        // new slot block: take an L2 block, then refine it one level further
         let blk = self.alloc_extent(t, ag, 1)?;
         let (_, local) = blk_split(blk);
         self.txn_write(t, blk, vec![0u8; self.sb.blocksize as usize]);
         hdr = self.read_ag_header_txn(t, ag)?; // alloc_extent rewrote it
+        let l3 = self.tbl_alloc_rec(t, &mut hdr)?;
+        let (_, l1, j) = self
+            .slot_l1_of(t, &hdr, local)?
+            .ok_or_else(|| anyhow!("AG {ag}: freshly allocated block has no L1 record"))?;
+        let mut l1rec = self.rec_read(t, ag, l1)?;
+        rec_state_set(&mut l1rec, j, CELL_REFINED);
+        rec_ref_set(&mut l1rec, j, l3);
+        self.rec_write(t, ag, l1, &l1rec)?;
+        let mut l3rec = [0u8; REC_SIZE];
+        rec_state_set(&mut l3rec, 0, CELL_FULL);
+        self.rec_write(t, ag, l3, &l3rec)?;
         hdr.ino_hint = local;
         self.put_ag_header(t, &mut hdr)?;
         Ok(ino_addr(ag, local * slots))
     }
 
-    /// Release an inode slot (zero it). A block whose slots are all free is
-    /// returned to the allocator (except the mkfs seed block, which always
-    /// holds the root inode and so never empties).
+    /// L1 record + child index for a (FULL) L2 block.
+    fn slot_l1_of(
+        &self,
+        t: &Txn,
+        hdr: &AgHeader,
+        local: u32,
+    ) -> Result<Option<((u32, u16), (u32, u16), u32)>> {
+        let c = (local / CELL_BLOCKS) as u64;
+        if self.rt_state(t, hdr, c)? != CELL_REFINED {
+            return Ok(None);
+        }
+        let l0 = self.rt_ref(t, hdr, c)?;
+        let l0rec = self.rec_read(t, hdr.ag_num, l0)?;
+        let i = (local % CELL_BLOCKS) / ALLOC_FANOUT;
+        if rec_state(&l0rec, i) != CELL_REFINED {
+            return Ok(None);
+        }
+        let l1 = rec_ref(&l0rec, i);
+        Ok(Some((l0, l1, local % ALLOC_FANOUT)))
+    }
+
+    /// Release an inode slot. A slot block whose slots all free coarsens
+    /// back into an ordinary free L2 cell.
     pub fn free_inode(&mut self, t: &mut Txn, ino: u64) -> Result<()> {
         let (ag, slot) = blk_split(ino);
         let isz = self.sb.inodesize as u32;
@@ -497,21 +557,56 @@ impl Gofs {
         let mut buf = self.txn_read(t, blk)?;
         let off = ((slot % slots) * isz) as usize;
         buf[off..off + isz as usize].fill(0);
-        let empty = buf.iter().all(|&b| b == 0);
         self.txn_write(t, blk, buf);
         let mut hdr = self.read_ag_header_txn(t, ag)?;
-        if empty {
+        let (l3, l1, j) = self
+            .slot_rec_at(t, &hdr, local)?
+            .ok_or_else(|| anyhow!("inode {ino:#x}: containing block is not slot-refined"))?;
+        let mut l3rec = self.rec_read(t, ag, l3)?;
+        rec_state_set(&mut l3rec, slot % slots, CELL_FREE);
+        if rec_all(&l3rec, CELL_FREE) {
+            // coarsen the slot block away: drop the L3 record, return the
+            // block to the allocator as a plain L2 free
+            self.tbl_free_rec(t, ag, l3)?;
+            let mut l1rec = self.rec_read(t, ag, l1)?;
+            rec_state_set(&mut l1rec, j, CELL_FULL);
+            rec_ref_set(&mut l1rec, j, (0, 0));
+            self.rec_write(t, ag, l1, &l1rec)?;
             self.free_extent(t, blk, 1)?;
             hdr = self.read_ag_header_txn(t, ag)?; // free_extent rewrote it
             if hdr.ino_hint == local {
                 hdr.ino_hint = 0;
                 self.put_ag_header(t, &mut hdr)?;
             }
-        } else if hdr.ino_hint != local {
-            hdr.ino_hint = local;
-            self.put_ag_header(t, &mut hdr)?;
+        } else {
+            self.rec_write(t, ag, l3, &l3rec)?;
+            if hdr.ino_hint != local {
+                hdr.ino_hint = local;
+                self.put_ag_header(t, &mut hdr)?;
+            }
         }
         Ok(())
+    }
+
+    /// Allocation granule (in blocks) of the run starting at `blk`:
+    /// 256 for an L0-cell run, 16 for L1, 1 for L2.
+    pub fn granule_at(&self, t: &Txn, blk: u64) -> Result<u64> {
+        let (ag, local) = blk_split(blk);
+        let hdr = self.read_ag_header_txn(t, ag)?;
+        let c = (local / CELL_BLOCKS) as u64;
+        match self.rt_state(t, &hdr, c)? {
+            CELL_FULL => Ok(CELL_BLOCKS as u64),
+            CELL_REFINED => {
+                let l0 = self.rt_ref(t, &hdr, c)?;
+                let l0rec = self.rec_read(t, ag, l0)?;
+                match rec_state(&l0rec, (local % CELL_BLOCKS) / ALLOC_FANOUT) {
+                    CELL_FULL => Ok(ALLOC_FANOUT as u64),
+                    CELL_REFINED => Ok(1),
+                    s => bail!("granule_at: block {blk:#x} in L1 state {s}"),
+                }
+            }
+            s => bail!("granule_at: block {blk:#x} in cell state {s}"),
+        }
     }
 
     pub fn read_ag_header_txn(&self, t: &Txn, ag: u32) -> Result<AgHeader> {

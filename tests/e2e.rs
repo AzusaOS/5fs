@@ -290,3 +290,117 @@ fn corruption_detected() {
     drop(f);
     assert!(gofs::fsck::check(&img).is_err(), "corrupt superblock must not parse");
 }
+
+#[test]
+fn truncate_reclaims_space() {
+    let dir = tempfile::tempdir().unwrap();
+    let img = fresh(&dir, "tr.img", 64);
+    {
+        let mut fs = Gofs::open(&img, true).unwrap();
+        let free0 = fs.sb.free_blocks;
+        let data = pattern(8 << 20, 11); // 8 MiB = 8 L0 cells
+        let ino = fs.import("big", &data, 0o644).unwrap();
+        let after_import = fs.sb.free_blocks;
+        assert!(free0 - after_import >= 2048, "import should consume ~2048 blocks");
+        // truncate to 1 MiB + 10 bytes: everything past the first cell
+        // boundary above the cutoff must come back
+        fs.truncate(ino, (1 << 20) + 10).unwrap();
+        let after_trunc = fs.sb.free_blocks;
+        assert!(
+            after_trunc >= after_import + 6 * 256,
+            "truncate freed only {} blocks",
+            after_trunc - after_import
+        );
+        assert_eq!(fs.read_file(ino).unwrap(), data[..(1 << 20) + 10]);
+        // and a sparse TREE file trims too
+        let s = fs.create("sparse", 0o644).unwrap();
+        for i in 0..10u64 {
+            fs.write(s, i * (1 << 20), &pattern(4096, 12)).unwrap();
+        }
+        let before = fs.sb.free_blocks;
+        fs.truncate(s, 2 << 20).unwrap();
+        assert!(fs.sb.free_blocks > before, "tree truncate must free blocks");
+        assert_eq!(fs.read(s, 1 << 20, 4096).unwrap(), pattern(4096, 12));
+    }
+    assert_clean(&img, "truncate reclamation");
+}
+
+#[test]
+fn directory_buddy_merge() {
+    let dir = tempfile::tempdir().unwrap();
+    let img = fresh(&dir, "bm.img", 64);
+    let n = 400;
+    {
+        let mut fs = Gofs::open(&img, true).unwrap();
+        fs.mkdir("d", 0o755).unwrap();
+        for i in 0..n {
+            fs.import(&format!("d/entry-{i:04}"), b"x", 0o644).unwrap();
+        }
+        // remove most entries: buckets must merge back and stay consistent
+        for i in 0..n - 20 {
+            fs.unlink(&format!("d/entry-{i:04}")).unwrap();
+        }
+        let d = fs.lookup_path("d").unwrap();
+        assert_eq!(fs.dir_entries(d).unwrap().len(), 20);
+        for i in n - 20..n {
+            assert!(
+                fs.lookup_path(&format!("d/entry-{i:04}")).is_ok(),
+                "entry-{i:04} lost in merge"
+            );
+        }
+    }
+    assert_clean(&img, "buddy merge");
+    {
+        // churn after merging: freed buckets must be reusable
+        let mut fs = Gofs::open(&img, true).unwrap();
+        for i in 0..100 {
+            fs.import(&format!("d/new-{i:03}"), b"y", 0o644).unwrap();
+        }
+        let d = fs.lookup_path("d").unwrap();
+        assert_eq!(fs.dir_entries(d).unwrap().len(), 120);
+    }
+    assert_clean(&img, "post-merge reuse");
+}
+
+#[test]
+fn kernel_region() {
+    let dir = tempfile::tempdir().unwrap();
+    let img = dir.path().join("k.img");
+    let kernel = pattern(300_000, 42);
+    let opts = MkfsOpts {
+        size: Some(64 << 20),
+        label: "boot".into(),
+        kernel: Some(kernel.clone()),
+        ..Default::default()
+    };
+    let s = mkfs(&img, &opts).unwrap();
+    assert_ne!(s.kernel_offset, 0);
+    assert_clean(&img, "mkfs --kernel");
+    {
+        let fs = Gofs::open(&img, false).unwrap();
+        // raw read at the physical offset must be the kernel: that is the
+        // contiguity guarantee the bootloader relies on
+        let mut raw = vec![0u8; kernel.len()];
+        fs.dev.pread(&mut raw, fs.sb.kernel_offset).unwrap();
+        assert_eq!(raw, kernel, "kernel must be raw-readable at sb_kernel_offset");
+        // and visible as a normal file
+        let ino = fs.lookup_path("kernel.bin").unwrap();
+        assert_eq!(fs.read_file(ino).unwrap(), kernel);
+    }
+    {
+        let mut fs = Gofs::open(&img, true).unwrap();
+        let ino = fs.lookup_path("kernel.bin").unwrap();
+        // immutable to ordinary writes
+        assert!(fs.write(ino, 0, b"boom").is_err(), "write must refuse");
+        assert!(fs.truncate(ino, 0).is_err(), "truncate must refuse");
+        assert!(fs.unlink("kernel.bin").is_err(), "unlink must refuse");
+        // but replaceable through the dedicated path
+        let newk = pattern(250_000, 43);
+        fs.kernel_update(&newk).unwrap();
+        assert_eq!(fs.sb.kernel_end - fs.sb.kernel_offset, 250_000);
+        assert_eq!(fs.read_file(ino).unwrap(), newk);
+        // too large for the reserved region must refuse
+        assert!(fs.kernel_update(&pattern(1 << 20, 44)).is_err());
+    }
+    assert_clean(&img, "kernel update");
+}

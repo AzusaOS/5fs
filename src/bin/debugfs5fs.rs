@@ -55,6 +55,8 @@ enum Cmd {
     Relocate { ag: u32, offset: u64 },
     /// Retire an empty AG
     Retire { ag: u32 },
+    /// Replace the boot kernel in place (must fit the reserved region)
+    KernelUpdate { host: PathBuf },
 }
 
 fn parse_ino(s: &str) -> Result<u64> {
@@ -95,6 +97,7 @@ fn main() -> Result<()> {
             | Cmd::Shrink { .. }
             | Cmd::Relocate { .. }
             | Cmd::Retire { .. }
+            | Cmd::KernelUpdate { .. }
     );
     let mut fs = Gofs::open(&args.device, writable)?;
 
@@ -306,6 +309,11 @@ fn main() -> Result<()> {
         Cmd::Retire { ag } => {
             fs.retire(ag)?;
             println!("AG {ag} retired");
+        }
+        Cmd::KernelUpdate { host } => {
+            let data = std::fs::read(&host)?;
+            fs.kernel_update(&data)?;
+            println!("kernel updated: {} bytes at phys {:#x}", data.len(), fs.sb.kernel_offset);
         }
     }
     Ok(())

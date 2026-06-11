@@ -101,9 +101,11 @@ implementation should follow (not format-binding):
 * Allocation granularity: ≤ 16 blocks exact (L2), 17–255 blocks in 16-block
   L1 cells, ≥ 256 in whole L0 cells. `free` rediscovers granularity from
   the on-disk states, so callers free `(start, length)` only.
-* Inode slots: the spec's level-3 slot refinement is deferred — inode
-  blocks are ordinary single-block allocations, free slots are recognized
-  by being zeroed, and an emptied inode block returns to the allocator.
+* Inode slots use the spec's level-3 refinement: a slot block is an L2 cell
+  whose L1 record child is REFINED, referencing a slot record that tracks
+  the 16 inode slots. mkfs builds the first chain by hand (arena cell +
+  L0/L1/L3 records) so the root inode is allocator-tracked from block one;
+  an emptied slot block coarsens back to a free L2 cell.
 
 ## Open questions
 

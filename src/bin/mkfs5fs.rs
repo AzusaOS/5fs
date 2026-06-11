@@ -21,6 +21,9 @@ struct Args {
     /// Journal size (e.g. 16M); default: 128M capped to 1/16 of the device
     #[arg(short, long, value_parser = parse_size)]
     journal_size: Option<u64>,
+    /// Kernel image to store contiguously for the bootloader (becomes /kernel.bin)
+    #[arg(short, long)]
+    kernel: Option<PathBuf>,
     /// Overwrite an existing filesystem
     #[arg(short, long)]
     force: bool,
@@ -53,11 +56,16 @@ fn main() -> Result<()> {
             }
         }
     }
+    let kernel = match &args.kernel {
+        Some(p) => Some(std::fs::read(p)?),
+        None => None,
+    };
     let opts = MkfsOpts {
         size: args.size,
         blocksize: args.blocksize,
         journal: args.journal_size,
         label: args.label,
+        kernel,
         ..Default::default()
     };
     let s = mkfs(&args.device, &opts)?;
@@ -67,5 +75,8 @@ fn main() -> Result<()> {
     println!("  journal: {} blocks", s.journal_blocks);
     println!("  root:    inode {:#x}", s.root_ino);
     println!("  free:    {} blocks", s.free_blocks);
+    if s.kernel_offset != 0 {
+        println!("  kernel:  phys {:#x} (/kernel.bin, contiguous)", s.kernel_offset);
+    }
     Ok(())
 }

@@ -7,8 +7,11 @@
 //! volume UUID over the name's UTF-16BE bytes; a bucket is selected by the
 //! top `global_depth` bits.
 //!
-//! v1: bucket buddy-merge is not implemented; a directory that empties
-//! completely collapses back to FMT_EMPTY (its blocks are freed).
+//! Coarsening: removals trigger buddy-merge — two buckets that differ only
+//! in their deepest hash bit and fit one block re-merge, the table halves
+//! when every pair collapses, and freed bucket numbers go on a freelist in
+//! the header (reused by later splits). A directory that empties completely
+//! collapses back to FMT_EMPTY and frees its blocks.
 
 use crate::fmt::*;
 use crate::fs::Gofs;
@@ -126,7 +129,11 @@ impl Gofs {
         Ok(runs[0].1)
     }
 
-    fn dhdr_read(&self, t: &Txn, inode: &Inode) -> Result<(u8, u32, Vec<u32>, u64)> {
+    /// (depth, nbuckets, table, header block, freelist). The freelist of
+    /// reusable bucket numbers grows down from the end of the header block;
+    /// its count lives at offset 18.
+    #[allow(clippy::type_complexity)]
+    fn dhdr_read(&self, t: &Txn, inode: &Inode) -> Result<(u8, u32, Vec<u32>, u64, Vec<u32>)> {
         let blk = self.dir_block_addr(t, inode, 0)?;
         let buf = self.dir_block_read(t, inode, 0)?;
         if buf[0..4] != DIRH_MAGIC {
@@ -139,7 +146,10 @@ impl Gofs {
         let nbuckets = get_u32(&buf, 20);
         let table: Vec<u32> =
             (0..1usize << depth).map(|i| get_u32(&buf, DH_HDR + i * 4)).collect();
-        Ok((depth, nbuckets, table, blk))
+        let nfree = get_u16(&buf, 18) as usize;
+        let bs = buf.len();
+        let freelist: Vec<u32> = (0..nfree).map(|k| get_u32(&buf, bs - 4 * (k + 1))).collect();
+        Ok((depth, nbuckets, table, blk, freelist))
     }
 
     fn dhdr_write(
@@ -149,6 +159,7 @@ impl Gofs {
         depth: u8,
         nbuckets: u32,
         table: &[u32],
+        freelist: &[u32],
     ) -> Result<()> {
         let bs = self.sb.blocksize as usize;
         let mut buf = vec![0u8; bs];
@@ -156,12 +167,16 @@ impl Gofs {
         let old = self.txn_read(t, blk).map(|b| get_u64(&b, 8)).unwrap_or(0);
         put_u64(&mut buf, 8, old + 1);
         buf[16] = depth;
+        put_u16(&mut buf, 18, freelist.len() as u16);
         put_u32(&mut buf, 20, nbuckets);
-        if DH_HDR + table.len() * 4 > bs {
+        if DH_HDR + table.len() * 4 + freelist.len() * 4 > bs {
             bail!("directory table exceeds header block");
         }
         for (i, b) in table.iter().enumerate() {
             put_u32(&mut buf, DH_HDR + i * 4, *b);
+        }
+        for (k, b) in freelist.iter().enumerate() {
+            put_u32(&mut buf, bs - 4 * (k + 1), *b);
         }
         let c = csum(&buf, 4);
         put_u32(&mut buf, 4, c);
@@ -208,9 +223,9 @@ impl Gofs {
             FMT_EMPTY => Ok(Vec::new()),
             FMT_EMBED => Ok(dir_parse(&inode.payload)),
             FMT_EXTENT | FMT_TREE => {
-                let (_, nbuckets, _, _) = self.dhdr_read(t, inode)?;
+                let (_, nbuckets, _, _, freelist) = self.dhdr_read(t, inode)?;
                 let mut out = Vec::new();
-                for b in 0..nbuckets {
+                for b in (0..nbuckets).filter(|b| !freelist.contains(b)) {
                     let (entries, _, _) = self.bucket_read(t, inode, b)?;
                     out.extend(entries.into_iter().map(|e| DirEntry {
                         ino: e.ino,
@@ -234,7 +249,7 @@ impl Gofs {
             FMT_EMBED => Ok(dir_parse(&inode.payload).into_iter().find(|e| e.name == name)),
             FMT_EXTENT | FMT_TREE => {
                 let h = hash_name(&self.sb.uuid, name);
-                let (depth, _, table, _) = self.dhdr_read(t, inode)?;
+                let (depth, _, table, _, _) = self.dhdr_read(t, inode)?;
                 let bno = table[bucket_index(h, depth)];
                 let (entries, _, _) = self.bucket_read(t, inode, bno)?;
                 Ok(entries
@@ -289,7 +304,7 @@ impl Gofs {
         inode.payload.fill(0);
         let hblk = self.dir_block_ensure(t, ag, inode, 0)?;
         let bblk = self.dir_block_ensure(t, ag, inode, 1)?;
-        self.dhdr_write(t, hblk, 0, 1, &[0])?;
+        self.dhdr_write(t, hblk, 0, 1, &[0], &[])?;
         self.bucket_write(t, bblk, 0, &[])?;
         inode.size = 2 * self.sb.blocksize as u64;
         for e in old {
@@ -310,7 +325,7 @@ impl Gofs {
         let new = HEntry { ino: entry.ino, hash: h, ftype: entry.ftype, name: entry.name.clone() };
         let bs = self.sb.blocksize as usize;
         loop {
-            let (depth, nbuckets, mut table, hblk) = self.dhdr_read(t, inode)?;
+            let (depth, nbuckets, mut table, hblk, mut freelist) = self.dhdr_read(t, inode)?;
             let bno = table[bucket_index(h, depth)];
             let (mut entries, ld, bblk) = self.bucket_read(t, inode, bno)?;
             if bucket_fits(bs, &entries, &new) {
@@ -332,7 +347,11 @@ impl Gofs {
                 }
                 table = bigger;
             }
-            let new_bno = nbuckets;
+            // reuse a freed bucket number before growing the file
+            let (new_bno, new_nbuckets) = match freelist.pop() {
+                Some(b) => (b, nbuckets),
+                None => (nbuckets, nbuckets + 1),
+            };
             let nblk = self.dir_block_ensure(t, ag, inode, 1 + new_bno as u64)?;
             inode.size = inode.size.max((2 + new_bno as u64) * bs as u64);
             let bit = 63 - ld; // the bit that distinguishes the buddies
@@ -345,7 +364,7 @@ impl Gofs {
                     *b = new_bno;
                 }
             }
-            self.dhdr_write(t, hblk, depth, nbuckets + 1, &table)?;
+            self.dhdr_write(t, hblk, depth, new_nbuckets, &table, &freelist)?;
             // loop: retry the insert against the new layout
         }
     }
@@ -357,13 +376,21 @@ impl Gofs {
         if !matches!(inode.format, FMT_EXTENT | FMT_TREE) {
             return Ok(errs); // EMBED/EMPTY have nothing structural to check
         }
-        let (depth, nbuckets, table, _) = self.dhdr_read(t, inode)?;
+        let (depth, nbuckets, table, _, freelist) = self.dhdr_read(t, inode)?;
         for (idx, b) in table.iter().enumerate() {
             if *b >= nbuckets {
                 errs.push(format!("table[{idx}] points at bucket {b} >= {nbuckets}"));
             }
+            if freelist.contains(b) {
+                errs.push(format!("table[{idx}] points at freed bucket {b}"));
+            }
         }
-        for b in 0..nbuckets {
+        for b in &freelist {
+            if *b >= nbuckets {
+                errs.push(format!("freelist entry {b} >= {nbuckets}"));
+            }
+        }
+        for b in (0..nbuckets).filter(|b| !freelist.contains(b)) {
             match self.bucket_read(t, inode, b) {
                 Ok((entries, ld, _)) => {
                     if ld > depth {
@@ -383,6 +410,68 @@ impl Gofs {
             }
         }
         Ok(errs)
+    }
+
+    /// Buddy-merge pass: while a bucket and its buddy (same local depth,
+    /// differing in the deepest distinguishing hash bit) fit one block,
+    /// merge them; then halve the table while every slot pair is identical.
+    /// Freed bucket numbers go on the header freelist for later splits.
+    fn try_merge(&mut self, t: &mut Txn, inode: &mut Inode) -> Result<()> {
+        let bs = self.sb.blocksize as usize;
+        loop {
+            let (depth, nbuckets, mut table, hblk, mut freelist) = self.dhdr_read(t, inode)?;
+            if depth == 0 {
+                return Ok(());
+            }
+            let mut acted = false;
+            for idx in 0..table.len() {
+                let bno = table[idx];
+                let (entries, ld, bblk) = self.bucket_read(t, inode, bno)?;
+                if ld == 0 {
+                    continue;
+                }
+                let buddy_idx = idx ^ (1usize << (depth - ld));
+                let bno2 = table[buddy_idx];
+                if bno2 == bno {
+                    continue;
+                }
+                let (entries2, ld2, bblk2) = self.bucket_read(t, inode, bno2)?;
+                if ld2 != ld {
+                    continue;
+                }
+                let used: usize = entries
+                    .iter()
+                    .chain(entries2.iter())
+                    .map(|e| entry_size(e.name.encode_utf16().count()))
+                    .sum();
+                if BK_HDR + used > bs {
+                    continue;
+                }
+                let mut all = entries;
+                all.extend(entries2);
+                self.bucket_write(t, bblk, ld - 1, &all)?;
+                self.bucket_write(t, bblk2, 0, &[])?; // freed bucket left empty
+                for b in table.iter_mut() {
+                    if *b == bno2 {
+                        *b = bno;
+                    }
+                }
+                freelist.push(bno2);
+                self.dhdr_write(t, hblk, depth, nbuckets, &table, &freelist)?;
+                acted = true;
+                break;
+            }
+            if acted {
+                continue;
+            }
+            // halve the table when every adjacent pair points the same way
+            if table.chunks(2).all(|p| p[0] == p[1]) {
+                let halved: Vec<u32> = table.chunks(2).map(|p| p[0]).collect();
+                self.dhdr_write(t, hblk, depth - 1, nbuckets, &halved, &freelist)?;
+                continue;
+            }
+            return Ok(());
+        }
     }
 
     /// Remove an entry by name. Returns it. An EMBED directory is repacked;
@@ -408,7 +497,7 @@ impl Gofs {
             }
             FMT_EXTENT | FMT_TREE => {
                 let h = hash_name(&self.sb.uuid, name);
-                let (depth, _, table, _) = self.dhdr_read(t, inode)?;
+                let (depth, _, table, _, _) = self.dhdr_read(t, inode)?;
                 let bno = table[bucket_index(h, depth)];
                 let (mut entries, ld, bblk) = self.bucket_read(t, inode, bno)?;
                 let i = entries
@@ -417,7 +506,8 @@ impl Gofs {
                     .ok_or_else(|| anyhow!("{name}: not found"))?;
                 let removed = entries.remove(i);
                 self.bucket_write(t, bblk, ld, &entries)?;
-                if entries.is_empty() && self.dir_count(t, inode)? == 0 {
+                self.try_merge(t, inode)?;
+                if self.dir_count(t, inode)? == 0 {
                     // collapse: free the directory's blocks entirely
                     self.map_free_all(t, inode)?;
                 }

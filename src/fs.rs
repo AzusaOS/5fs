@@ -275,6 +275,9 @@ impl Gofs {
         if inode.is_dir() {
             bail!("is a directory");
         }
+        if inode.flags & INODE_FLAG_IMMUTABLE != 0 {
+            bail!("immutable file");
+        }
         let end = offset + data.len() as u64;
         if matches!(inode.format, FMT_EMPTY | FMT_EMBED) && end <= INODE_PAYLOAD as u64 {
             inode.format = FMT_EMBED;
@@ -364,6 +367,9 @@ impl Gofs {
         if inode.is_dir() {
             bail!("is a directory");
         }
+        if inode.flags & INODE_FLAG_IMMUTABLE != 0 {
+            bail!("immutable file");
+        }
         let old = inode.size;
         if size == old {
             return Ok(());
@@ -378,22 +384,10 @@ impl Gofs {
                 FMT_EXTENT | FMT_TREE if size == 0 => {
                     self.map_free_all(&mut t, &mut inode)?;
                 }
-                FMT_EXTENT => {
+                FMT_EXTENT | FMT_TREE => {
                     let cutoff = size.div_ceil(bs);
-                    let mut keep = Vec::new();
-                    for e in extents_parse(&inode.payload) {
-                        if e.file_block >= cutoff {
-                            self.free_extent(&mut t, e.blk, e.blocks as u64)?;
-                            inode.nblocks = inode.nblocks.saturating_sub(e.blocks as u64);
-                        } else {
-                            keep.push(e);
-                        }
-                    }
-                    extents_store(&mut inode.payload, &keep).map_err(|e| anyhow!(e))?;
-                    self.zero_tail(&t, &inode, size, old)?;
-                }
-                FMT_TREE => {
-                    // v1: free nothing below child granularity; zero the tail
+                    let freed = self.map_truncate(&mut t, &mut inode, cutoff)?;
+                    inode.nblocks = inode.nblocks.saturating_sub(freed);
                     self.zero_tail(&t, &inode, size, old)?;
                 }
                 f => bail!("file format {f} unsupported"),
@@ -422,7 +416,7 @@ impl Gofs {
                     pos += n;
                 }
                 Map::Hole(hl) => {
-                    pos += hl.saturating_mul(bs).saturating_sub(in_blk).max(1);
+                    pos = pos.saturating_add(hl.saturating_mul(bs).saturating_sub(in_blk).max(1));
                 }
             }
         }
@@ -538,6 +532,9 @@ impl Gofs {
         if want_dir != inode.is_dir() {
             bail!("{name}: {}", if want_dir { "not a directory" } else { "is a directory" });
         }
+        if inode.flags & INODE_FLAG_IMMUTABLE != 0 {
+            bail!("{name}: immutable file");
+        }
         if want_dir {
             if self.dir_count(&t, &inode)? != 0 {
                 bail!("{name}: directory not empty");
@@ -573,6 +570,9 @@ impl Gofs {
         if let Some(existing) = self.dir_find(&t, &dst, n2)? {
             if existing.ino != ent.ino {
                 let mut ei = self.read_inode_txn(&t, existing.ino)?;
+                if ei.flags & INODE_FLAG_IMMUTABLE != 0 {
+                    bail!("{n2}: immutable file");
+                }
                 if ei.is_dir() {
                     if self.dir_count(&t, &ei)? != 0 {
                         bail!("{n2}: directory not empty");
@@ -702,6 +702,37 @@ impl Gofs {
         let ino = self.create(path, mode)?;
         self.write(ino, 0, data)?;
         Ok(ino)
+    }
+
+    /// Replace the boot kernel in place. The new image must fit the region
+    /// reserved at mkfs (the kernel.bin extent); the inode stays immutable
+    /// to every other write path.
+    pub fn kernel_update(&mut self, data: &[u8]) -> Result<()> {
+        if self.sb.kernel_offset == 0 {
+            bail!("no kernel region (create one with mkfs --kernel)");
+        }
+        let ino = self
+            .dir_lookup(self.sb.root_ino, "kernel.bin")?
+            .ok_or_else(|| anyhow!("kernel.bin missing from the root directory"))?;
+        let mut t = self.txn();
+        let mut inode = self.read_inode_txn(&t, ino)?;
+        let extents = extents_parse(&inode.payload);
+        let capacity = extents.first().map(|e| e.blocks as u64).unwrap_or(0)
+            * self.sb.blocksize as u64;
+        if data.len() as u64 > capacity {
+            bail!("kernel ({} bytes) exceeds the reserved region ({capacity} bytes)", data.len());
+        }
+        // ordered: kernel bytes land (zero-padded to the region) before the
+        // metadata that describes them commits
+        let mut padded = data.to_vec();
+        padded.resize(capacity as usize, 0);
+        self.dev.pwrite(&padded, self.sb.kernel_offset)?;
+        self.dev.sync()?;
+        inode.size = data.len() as u64;
+        self.touch(&mut inode, false);
+        self.write_inode_txn(&mut t, ino, &inode)?;
+        self.sb.kernel_end = self.sb.kernel_offset + data.len() as u64;
+        self.commit(t)
     }
 }
 
