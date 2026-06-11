@@ -1,6 +1,4 @@
-/mkfs.gofs
-/gofsdump
-/disk.bin
-*.o
-*.d
+/target/
+Cargo.lock.bak
+*.img
 .*.swp
