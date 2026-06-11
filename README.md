@@ -1,40 +1,49 @@
-# 5FS - 5OS FileSystem
+# 5FS — the 5OS FileSystem
 
-Disk contains "allocation groups" of variable sizes.
+5FS (read "go-F-S" — 5 is *go* in Japanese, after Go-OS, the OS that boots in
+5 seconds) is a filesystem built around two ideas:
 
-Allocation groups descriptor is stored on allocation group zero (TODO create and define inode).
+1. **The filesystem is a movable, resizable object.** It grows, shrinks and
+   relocates itself online. Block and inode addresses are virtual (allocation
+   group relative), so moving data never rewrites file metadata.
+2. **Adaptive mesh refinement (AMR) as the single structural principle.**
+   At every level — the device map, the allocator, file extents, directories —
+   space is covered by coarse cells that refine into finer cells only where
+   detail is needed, and coarsen back when it isn't. One recursive idea
+   instead of four unrelated data structures.
 
-Global inode number contain <32 bits allocation group id><32 bits local group id>
+It also keeps the original 2015 goal: the kernel is stored in physically
+contiguous blocks at an offset recorded in the superblock, so a bootloader can
+load it with raw block reads and no filesystem driver.
 
-Inode number is actually inode offset on disk * inode size.
+## Status
 
-Default inode size = 256 bytes
+Design phase. The specification in `doc/` is format v2 (2026). The code in
+this repository is the 2015 prototype and implements the legacy format
+([doc/legacy-2015.md](doc/legacy-2015.md)); it will be rewritten against v2.
 
-Max allocation group size = max uint32 * 256 (max uint32 is 4G, so that'd be 1TB max)
+## Specification
 
-Journal: single journal, 128MB
+* [doc/0-principles.md](doc/0-principles.md) — the AMR cell model, naming, conventions
+* [doc/1-layout.md](doc/1-layout.md) — device layout, superblock, allocation groups, the AG map, addressing, boot region
+* [doc/2-allocation.md](doc/2-allocation.md) — free space management: the refinement tree allocator
+* [doc/3-inodes.md](doc/3-inodes.md) — inode format
+* [doc/4-extents.md](doc/4-extents.md) — file data mapping: extent refinement trees, sparse files, adaptive write granularity
+* [doc/5-directories.md](doc/5-directories.md) — directories: extendible hashing
+* [doc/6-journal.md](doc/6-journal.md) — journal and crash consistency
+* [doc/7-resize.md](doc/7-resize.md) — growing, shrinking, relocation and holes
 
-## Bitmap
+## Headline capabilities (design targets)
 
-The bitmap stored in each AG contains the status (available or not) of each block. More than that, it also contains information if the block is free, partially filled, full or reserved.
-
-Partially filled blocks can only be partially filled with inodes. In that case unused memory will be zero, while the inode will have the inode header ("IN").
-
-Inodes can point to blocks of data outside of the current AG, but extra data (external index, B+ tables, etc) will be stored in the same AG.
-
-## Allocation group format
-
-* header
-* optional AG0 header (cached data such as free space, etc - in same block as header)
-* bitmap
-* journal (if AG0)
-* optionally reserved space if AG0 and kernel is present. 5FS guarantees that kernel file system/kernel.bin will be stored in continuous blocks. Exact offset is stored in AG0 header.
-
-## Growing file system
-
-Easy as pie: add a allocation group
-
-## Shrinking file system
-
-This needs to be planned in advance. It can be done by removing an allocation group (once it is empty).
-
+* Online grow **and shrink**, including from the middle of the device.
+* The filesystem need not be contiguous on the device: allocation groups live
+  wherever the AG map says they do, and unmapped holes between them are fine
+  (thin provisioning, coexistence with foreign on-disk data).
+* Relocation is incremental and never touches file metadata.
+* Allocation granularity adapts from 1 MiB extents down to 256-byte inode
+  slots through one mechanism (tail packing without special cases).
+* Per-region adaptive block granularity inside a single file.
+* All metadata is checksummed and self-identifying; the filesystem is
+  scannable for recovery.
+* 64-bit timestamps.
+* Contiguous-kernel guarantee for bootloaders.
