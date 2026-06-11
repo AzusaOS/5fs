@@ -5,7 +5,21 @@ pub const VERSION: u32 = 2;
 pub const SB_MAGIC: [u8; 4] = *b"5FSB";
 pub const AG_MAGIC: [u8; 4] = *b"5FSH";
 pub const AGMAP_MAGIC: [u8; 4] = *b"5FSM";
+pub const ALLOC_MAGIC: [u8; 4] = *b"5FSA";
+pub const TREE_MAGIC: [u8; 4] = *b"5FST";
+pub const DIRH_MAGIC: [u8; 4] = *b"5FSD";
+pub const BUCKET_MAGIC: [u8; 4] = *b"5FSb";
+pub const JDESC_MAGIC: [u8; 4] = *b"5FSJ";
+pub const JCOMMIT_MAGIC: [u8; 4] = *b"5FSC";
 pub const INODE_MAGIC: u16 = 0x494e; // "IN"
+
+/// Allocator refinement fanout: an L0 cell (1 MiB) refines into 16 L1 cells
+/// (64 KiB), an L1 cell into 16 L2 cells (one 4 KiB block).
+pub const ALLOC_FANOUT: u32 = 16;
+/// Extent tree node fanout (doc/4-extents.md).
+pub const NODE_FANOUT: u64 = 64;
+/// Extent tree root (inode payload) fanout.
+pub const ROOT_FANOUT: usize = 6;
 
 pub const DEFAULT_BLOCKSIZE: u32 = 4096;
 pub const DEFAULT_INODESIZE: u16 = 256;
@@ -113,6 +127,10 @@ pub struct Superblock {
     pub rsvd_blocks: u64,
     pub full_blocks: u64,
     pub gen: u64,
+    /// Next journal transaction sequence number.
+    pub journal_seq: u64,
+    /// Journal write/replay position (block index within the journal area).
+    pub journal_head: u64,
 }
 
 impl Superblock {
@@ -142,6 +160,8 @@ impl Superblock {
         put_u64(&mut b, 158, self.rsvd_blocks);
         put_u64(&mut b, 166, self.full_blocks);
         put_u64(&mut b, 174, self.gen);
+        put_u64(&mut b, 182, self.journal_seq);
+        put_u64(&mut b, 190, self.journal_head);
         let c = csum(&b, 4);
         put_u32(&mut b, 4, c);
         b
@@ -186,6 +206,8 @@ impl Superblock {
         sb.rsvd_blocks = get_u64(b, 158);
         sb.full_blocks = get_u64(b, 166);
         sb.gen = get_u64(b, 174);
+        sb.journal_seq = get_u64(b, 182);
+        sb.journal_head = get_u64(b, 190);
         if !sb.blocksize.is_power_of_two() || sb.blocksize < 512 {
             return Err("superblock: bad blocksize".into());
         }
@@ -209,8 +231,10 @@ pub struct AgHeader {
     pub rsvd_blocks: u32,
     pub full_blocks: u32,
     pub alloc_root: u32, // block offset within AG
-    pub ino_hint: u32,
+    pub ino_hint: u32,   // local block of the current inode block (free slots)
     pub data_hint: u32,
+    /// Local block of the active allocator-table arena cell (0 = none).
+    pub tbl_arena: u32,
 }
 
 impl AgHeader {
@@ -226,6 +250,7 @@ impl AgHeader {
         put_u32(&mut b, 36, self.alloc_root);
         put_u32(&mut b, 40, self.ino_hint);
         put_u32(&mut b, 44, self.data_hint);
+        put_u32(&mut b, 48, self.tbl_arena);
         let c = csum(&b, 4);
         put_u32(&mut b, 4, c);
         b
@@ -252,15 +277,24 @@ impl AgHeader {
             alloc_root: get_u32(b, 36),
             ino_hint: get_u32(b, 40),
             data_hint: get_u32(b, 44),
+            tbl_arena: get_u32(b, 48),
         })
     }
 }
 
 /// Allocator root table geometry: (level-0 cells, table size in blocks).
+/// The table is a 2-bit state array over the L0 cells followed by a 6-byte
+/// child-table reference per cell (block u32 + record index u16), used only
+/// where the state is REFINED. See doc/2-allocation.md.
 pub fn rt_geometry(ag_blocks: u32, blocksize: u32) -> (u64, u32) {
     let cells = (ag_blocks as u64).div_ceil(CELL_BLOCKS as u64);
-    let bytes = cells.div_ceil(4);
+    let bytes = cells.div_ceil(4) + cells * 6;
     (cells, bytes.div_ceil(blocksize as u64) as u32)
+}
+
+/// Byte offset of L0 cell `c`'s child-table reference within the root table.
+pub fn rt_ref_off(cells: u64, c: u64) -> u64 {
+    cells.div_ceil(4) + c * 6
 }
 
 // --- AG map -------------------------------------------------------------------
@@ -746,9 +780,9 @@ mod tests {
 
     #[test]
     fn rt_geom() {
-        // 16 MiB AG at 4 KiB blocks = 4096 blocks = 16 cells -> 4 bytes -> 1 block
+        // 16 MiB AG = 4096 blocks = 16 cells -> 4B states + 96B refs -> 1 block
         assert_eq!(rt_geometry(4096, 4096), (16, 1));
-        // 64 GiB AG = 16 Mi blocks = 65536 cells -> 16 KiB -> 4 blocks
-        assert_eq!(rt_geometry(16 * 1024 * 1024, 4096), (65536, 4));
+        // 64 GiB AG = 16 Mi blocks = 65536 cells -> 16 KiB states + 384 KiB refs
+        assert_eq!(rt_geometry(16 * 1024 * 1024, 4096), (65536, 100));
     }
 }

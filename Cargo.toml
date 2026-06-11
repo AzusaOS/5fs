@@ -8,6 +8,7 @@ description = "5FS (GoFS) filesystem — library and tool suite (mkfs.5fs, fsck.
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crc32c = "0.6"
+siphasher = "1"
 uuid = { version = "1", features = ["v4"] }
 fuser = { version = "0.15", optional = true }
 libc = { version = "0.2", optional = true }

@@ -98,6 +98,8 @@ pub fn mkfs(path: &Path, opts: &MkfsOpts) -> Result<MkfsSummary> {
         agmap_length: AGMAP_BYTES,
         journal_length: journal_blocks,
         gen: 1,
+        journal_seq: 1,
+        journal_head: 0,
         ..Default::default()
     };
     sb_proto.uuid = *uuid::Uuid::new_v4().as_bytes();
@@ -167,6 +169,7 @@ pub fn mkfs(path: &Path, opts: &MkfsOpts) -> Result<MkfsSummary> {
             alloc_root,
             ino_hint: inode_block,
             data_hint: (rsvd_head_cells * CELL_BLOCKS as u64) as u32,
+            tbl_arena: 0,
         };
         let mut hdrblk = zero_block.clone();
         hdrblk[..AGHDR_SIZE].copy_from_slice(&hdr.to_bytes());

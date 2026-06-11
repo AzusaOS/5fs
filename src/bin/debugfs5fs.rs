@@ -24,14 +24,37 @@ enum Cmd {
     Ag { id: u32 },
     /// Print an inode (decimal or 0x-hex)
     Inode { ino: String },
-    /// List the root directory
-    Ls,
-    /// Print a file's contents to stdout (by name in root, or inode number)
-    Cat { name: String },
-    /// Copy a host file into the filesystem root
-    Import { host: PathBuf, name: String },
+    /// List a directory (default /)
+    Ls {
+        #[arg(default_value = "/")]
+        path: String,
+    },
+    /// Print a file's contents to stdout
+    Cat { path: String },
+    /// Copy a host file into the filesystem
+    Import { host: PathBuf, path: String },
+    /// Create a directory
+    Mkdir { path: String },
+    /// Remove a file or symlink
+    Rm { path: String },
+    /// Remove an empty directory
+    Rmdir { path: String },
+    /// Rename/move
+    Mv { from: String, to: String },
+    /// Create a symlink at `path` pointing to `target`
+    Symlink { path: String, target: String },
     /// Scan all mapped blocks for inode signatures
     Scan,
+    /// Show journal state
+    Journal,
+    /// Grow the filesystem to SIZE (e.g. 512M)
+    Grow { size: String },
+    /// Shrink the filesystem to SIZE (relocating/retiring tail AGs)
+    Shrink { size: String },
+    /// Move an AG wholesale to a new physical byte offset
+    Relocate { ag: u32, offset: u64 },
+    /// Retire an empty AG
+    Retire { ag: u32 },
 }
 
 fn parse_ino(s: &str) -> Result<u64> {
@@ -42,13 +65,37 @@ fn parse_ino(s: &str) -> Result<u64> {
     }
 }
 
+fn parse_size(s: &str) -> Result<u64> {
+    let s = s.trim();
+    let (num, mult) = match s.chars().last() {
+        Some('K' | 'k') => (&s[..s.len() - 1], 1u64 << 10),
+        Some('M' | 'm') => (&s[..s.len() - 1], 1 << 20),
+        Some('G' | 'g') => (&s[..s.len() - 1], 1 << 30),
+        Some('T' | 't') => (&s[..s.len() - 1], 1 << 40),
+        _ => (s, 1),
+    };
+    Ok(num.parse::<u64>()? * mult)
+}
+
 fn show_ts(t: Ts) -> String {
     format!("{}.{:09}", t.sec, t.nsec)
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let writable = matches!(args.cmd, Cmd::Import { .. });
+    let writable = matches!(
+        args.cmd,
+        Cmd::Import { .. }
+            | Cmd::Mkdir { .. }
+            | Cmd::Rm { .. }
+            | Cmd::Rmdir { .. }
+            | Cmd::Mv { .. }
+            | Cmd::Symlink { .. }
+            | Cmd::Grow { .. }
+            | Cmd::Shrink { .. }
+            | Cmd::Relocate { .. }
+            | Cmd::Retire { .. }
+    );
     let mut fs = Gofs::open(&args.device, writable)?;
 
     match args.cmd {
@@ -61,7 +108,10 @@ fn main() -> Result<()> {
             println!("root_ino   {:#x}", sb.root_ino);
             println!("next_ag    {}", sb.next_ag);
             println!("agmap      phys {:#x} (+{:#x} per copy)", sb.agmap_offset, sb.agmap_length);
-            println!("journal    blk {:#x} len {} blocks", sb.journal_start, sb.journal_length);
+            println!(
+                "journal    blk {:#x} len {} blocks (seq {}, head {})",
+                sb.journal_start, sb.journal_length, sb.journal_seq, sb.journal_head
+            );
             if sb.kernel_offset != 0 {
                 println!("kernel     phys {:#x}..{:#x}", sb.kernel_offset, sb.kernel_end);
             } else {
@@ -96,12 +146,12 @@ fn main() -> Result<()> {
         Cmd::Ag { id } => {
             let h = fs.read_ag_header(id)?;
             println!(
-                "AG {}  gen {}  length {} blocks  alloc_root blk {}",
-                h.ag_num, h.gen, h.length, h.alloc_root
+                "AG {}  gen {}  length {} blocks  alloc_root blk {}  tbl_arena {}",
+                h.ag_num, h.gen, h.length, h.alloc_root, h.tbl_arena
             );
             println!(
-                "counters: free {}  rsvd {}  full {}",
-                h.free_blocks, h.rsvd_blocks, h.full_blocks
+                "counters: free {}  rsvd {}  full {}  ino_hint blk {}",
+                h.free_blocks, h.rsvd_blocks, h.full_blocks, h.ino_hint
             );
             let (cells, _) = rt_geometry(h.length, fs.sb.blocksize);
             let table = fs.read_root_table(&h)?;
@@ -152,27 +202,55 @@ fn main() -> Result<()> {
                         );
                     }
                 }
+                FMT_TREE => {
+                    use gofs::extent::{cov, root_child, root_level, root_state};
+                    let level = root_level(&i.payload);
+                    println!("  tree root: level {level} (child coverage {} blocks)", cov(level));
+                    for c in 0..ROOT_FANOUT {
+                        let st = root_state(&i.payload, c);
+                        let (blocks, addr) = root_child(&i.payload, c);
+                        match st {
+                            CELL_FREE => {}
+                            CELL_FULL => println!("    child {c}: FULL {blocks} blocks @ {addr:#x}"),
+                            CELL_REFINED => println!("    child {c}: REFINED -> node {addr:#x}"),
+                            s => println!("    child {c}: bad state {s}"),
+                        }
+                    }
+                }
                 _ => {}
             }
         }
-        Cmd::Ls => {
-            for e in fs.dir_entries(fs.sb.root_ino)? {
+        Cmd::Ls { path } => {
+            let dir = fs.lookup_path(&path)?;
+            for e in fs.dir_entries(dir)? {
                 let i = fs.read_inode(e.ino)?;
                 println!("{:o} {:>10} {:#x}  {}", i.mode, i.size, e.ino, e.name);
             }
         }
-        Cmd::Cat { name } => {
-            let ino = match fs.dir_lookup(fs.sb.root_ino, &name)? {
-                Some(i) => i,
-                None => parse_ino(&name).map_err(|_| anyhow!("{name}: not found"))?,
+        Cmd::Cat { path } => {
+            let ino = match fs.lookup_path(&path) {
+                Ok(i) => i,
+                Err(_) => parse_ino(&path).map_err(|_| anyhow!("{path}: not found"))?,
             };
             use std::io::Write;
             std::io::stdout().write_all(&fs.read_file(ino)?)?;
         }
-        Cmd::Import { host, name } => {
+        Cmd::Import { host, path } => {
             let data = std::fs::read(&host)?;
-            let ino = fs.import(&name, &data, 0o644)?;
-            println!("imported {} bytes as \"{name}\" (inode {ino:#x})", data.len());
+            let ino = fs.import(&path, &data, 0o644)?;
+            println!("imported {} bytes as \"{path}\" (inode {ino:#x})", data.len());
+        }
+        Cmd::Mkdir { path } => {
+            let ino = fs.mkdir(&path, 0o755)?;
+            println!("created directory \"{path}\" (inode {ino:#x})");
+        }
+        Cmd::Rm { path } => fs.unlink(&path)?,
+        Cmd::Rmdir { path } => fs.rmdir(&path)?,
+        Cmd::Mv { from, to } => fs.rename(&from, &to)?,
+        Cmd::Symlink { path, target } => {
+            let (p, n) = fs.resolve_parent(&path)?;
+            let ino = fs.symlink_at(p, &n, &target)?;
+            println!("created symlink \"{path}\" -> \"{target}\" (inode {ino:#x})");
         }
         Cmd::Scan => {
             let bs = fs.sb.blocksize as usize;
@@ -202,6 +280,32 @@ fn main() -> Result<()> {
                 }
             }
             println!("{found} inode(s)");
+        }
+        Cmd::Journal => {
+            println!(
+                "journal: blk {:#x}, {} blocks, next seq {}, head {}",
+                fs.sb.journal_start, fs.sb.journal_length, fs.sb.journal_seq, fs.sb.journal_head
+            );
+            match fs.journal_pending()? {
+                0 => println!("clean: no transactions pending replay"),
+                n => println!("{n} transaction(s) pending replay"),
+            }
+        }
+        Cmd::Grow { size } => {
+            let ag = fs.grow(parse_size(&size)?)?;
+            println!("grown: new AG {ag}");
+        }
+        Cmd::Shrink { size } => {
+            fs.shrink(parse_size(&size)?)?;
+            println!("shrunk to {size}");
+        }
+        Cmd::Relocate { ag, offset } => {
+            fs.relocate(ag, offset)?;
+            println!("AG {ag} relocated to {offset:#x}");
+        }
+        Cmd::Retire { ag } => {
+            fs.retire(ag)?;
+            println!("AG {ag} retired");
         }
     }
     Ok(())

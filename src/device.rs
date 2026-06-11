@@ -51,4 +51,11 @@ impl Device {
     pub fn sync(&self) -> Result<()> {
         self.file.sync_all().context("sync")
     }
+
+    /// Resize a file-backed device (grow/shrink).
+    pub fn set_len(&mut self, size: u64) -> Result<()> {
+        self.file.set_len(size).context("set_len")?;
+        self.size = size;
+        Ok(())
+    }
 }
