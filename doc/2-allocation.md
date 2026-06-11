@@ -34,8 +34,10 @@ cell, not 256 marked blocks.
 ## On-disk structure
 
 The **root table** sits right after the AG header (`ag_alloc_root`): a flat
-2-bit state array over the AG's level-0 cells. A 64 GiB AG has 65,536
-level-0 cells → 16 KiB root table; even a 1 TiB AG needs only 256 KiB.
+2-bit state array over the AG's level-0 cells, followed by a 6-byte
+child-table reference per cell (`block u32` within the AG + `record u16`),
+meaningful only where the state is REFINED. A 64 GiB AG has 65,536 level-0
+cells → 16 KiB of states + 384 KiB of references (100 blocks).
 
 **Child tables** are materialized only for REFINED cells and live in
 allocator table blocks (state RSVD, magic `"5FSA"`, CRC32C, generation).
@@ -90,10 +92,23 @@ implementation should follow (not format-binding):
   AG** — the 2015 same-AG rule becomes a preference, not an invariant, to
   remove its ENOSPC-with-free-space failure mode.
 
+## Implementation notes (v1)
+
+* Table blocks live in **arena cells**: a FREE level-0 cell claimed as RSVD
+  (`ag_tbl_arena` points at the active one). Table blocks carry magic
+  `"5FSA"`, CRC32C, a generation, and a used-record bitmap; records are 128
+  bytes at offsets `128 × (1 + index)`.
+* Allocation granularity: ≤ 16 blocks exact (L2), 17–255 blocks in 16-block
+  L1 cells, ≥ 256 in whole L0 cells. `free` rediscovers granularity from
+  the on-disk states, so callers free `(start, length)` only.
+* Inode slots: the spec's level-3 slot refinement is deferred — inode
+  blocks are ordinary single-block allocations, free slots are recognized
+  by being zeroed, and an emptied inode block returns to the allocator.
+
 ## Open questions
 
-* Exact packing of root-table reference entries.
 * Whether level-1 (64 KiB) FULL cells should be the default unit for medium
   files rather than going straight to level 0.
 * Per-AG vs global policy for choosing which AG a new file allocates from
   (parallelism vs locality).
+* Releasing emptied arena cells back to FREE.

@@ -18,13 +18,30 @@ load it with raw block reads and no filesystem driver.
 
 ## Status
 
-The specification in `doc/` is format v2 (2026). The Rust implementation
-(`gofs` library plus tools) covers a v0 subset of v2: mkfs, structural fsck,
-image inspection and offline import via debugfs, and read-only FUSE mounting.
-The refinement-tree allocator currently operates on whole level-0 cells;
-refinement below that, extent trees, hashed directories, and the journal
-write path are not implemented yet. The 2015 C++ prototype (legacy format,
-[doc/legacy-2015.md](doc/legacy-2015.md)) has been removed.
+The specification in `doc/` is format v2 (2026), implemented by the `gofs`
+Rust library and tools:
+
+* **Journaled metadata** — whole-block transactions, checksummed commits,
+  idempotent replay on mount; data in ordered mode.
+* **Refinement-tree allocator** — 1 MiB cells refining to single blocks,
+  table blocks in arena cells, coarsening buddy-merge on free.
+* **Extent refinement trees** — sparse files, refine-on-collision,
+  per-region granularity; small files stay inline (EMBED / 6 inline
+  extents).
+* **Extendible-hash directories** — SipHash keyed by volume UUID, bucket
+  splits, EMBED ↔ hashed conversion both ways.
+* **Full namespace** — create/mkdir/unlink/rmdir/rename/link/symlink/
+  truncate/setattr, path resolution; read-write FUSE mount.
+* **Resize** — online grow, wholesale AG relocation, retiring empty AGs,
+  tail shrink; only the AG map moves, never file metadata.
+* **fsck** — validates every structure above, tallies the allocator
+  against counters, walks the namespace verifying nlinks and mappings.
+
+Deferred (tracked in the docs): allocator L3 inode-slot refinement, bucket
+buddy-merge, sub-child truncate reclamation, CoW (open decision,
+[doc/6-journal.md](doc/6-journal.md)), kernel boot region tooling. The 2015
+C++ prototype (legacy format, [doc/legacy-2015.md](doc/legacy-2015.md)) has
+been removed.
 
 ## Building
 
@@ -41,10 +58,13 @@ Cargo forbids `.` in binary target names, so `cargo build` produces
 ```
 mkfs.5fs disk.img --size 256M -L mylabel
 fsck.5fs disk.img
-debugfs.5fs disk.img sb | agmap | ag 0 | ls | inode 0x30 | scan
-debugfs.5fs disk.img import hostfile.bin name.bin
-debugfs.5fs disk.img cat name.bin
-mount.5fs disk.img /mnt/point    # read-only; needs FUSE (macFUSE on macOS)
+debugfs.5fs disk.img sb | agmap | ag 0 | inode 0x30 | scan | journal
+debugfs.5fs disk.img ls /some/dir
+debugfs.5fs disk.img import hostfile.bin /docs/name.bin
+debugfs.5fs disk.img cat /docs/name.bin
+debugfs.5fs disk.img mkdir /d | rm /f | rmdir /d | mv /a /b | symlink /l target
+debugfs.5fs disk.img grow 512M | shrink 256M | relocate 2 0x4000000 | retire 1
+mount.5fs disk.img /mnt/point    # read-write; needs FUSE (macFUSE on macOS)
 ```
 
 ## Specification

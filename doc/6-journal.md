@@ -41,6 +41,14 @@ A transaction is valid only if its commit block is present, its sequence
 number is the expected next, and the transaction checksum matches — torn
 writes are detected by checksum, not by hope.
 
+Pinned layout: descriptor and commit blocks carry `magic(4) csum(4)
+seq(8)`; the descriptor adds `count(4)` and the target block addresses from
+offset 24; the commit adds the transaction CRC32C at offset 16. A
+transaction never wraps across the journal end (the writer restarts at
+block 0 instead). The superblock's `sb_journal_seq`/`sb_journal_head` are
+the checkpoint: replay starts there, also probing block 0 to catch an
+unrecorded wrap.
+
 ## Replay and checkpoint
 
 * **Mount**: scan from the last checkpoint, replay every valid transaction

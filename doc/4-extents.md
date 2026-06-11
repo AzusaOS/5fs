@@ -41,10 +41,13 @@ tree node (one block, allocated as fs metadata):
 ```
 
 The root lives in the inode payload (a reduced-width node), so small trees
-add no extra reads. Cell sizes are powers of the fanout times the block
-size; the minimum data cell is one block. Exact fanout constants (inline
-root vs block-sized nodes) are pinned at format freeze — the structure, not
-the constants, is the format.
+add no extra reads. Pinned constants: the root has **6** children
+(`[0] level, [2..4] states, child i at 8+16i: blocks u32, pad, addr u64`);
+node blocks have **64** children (header 24 B, states at 24, 16-byte child
+records at 40). A child at `level` covers 64^level blocks; a FULL child
+maps `blocks ≤ coverage` from the start of its range, the remainder being a
+hole — which is how appends and tails avoid refinement until a write
+actually collides.
 
 Properties:
 

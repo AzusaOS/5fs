@@ -53,6 +53,8 @@ the end of AG 0's first physical segment. Fields (all big-endian):
 | `sb_kernel_end` | 8 | physical end of kernel region |
 | `sb_free_blocks` etc. | 8 each | volume-wide counters (advisory; authoritative counts are per-AG) |
 | `sb_gen` | 8 | generation, bumped on every superblock write |
+| `sb_journal_seq` | 8 | next journal transaction sequence ([6-journal.md](6-journal.md)) |
+| `sb_journal_head` | 8 | journal write/replay position (block index in the journal area) |
 
 Mount procedure: read block 0, verify magic + checksum; on failure try the
 backup; load the AG map; replay the journal; mount.
@@ -111,6 +113,7 @@ Each AG begins with a header block:
 | `ag_free_blocks` / `ag_rsvd_blocks` / `ag_full_blocks` | 4 each | authoritative counters |
 | `ag_alloc_root` | 4 | block offset (within this AG) of the allocator root table |
 | `ag_ino_hint` / `ag_data_hint` | 4 each | allocation cursors (hints only) |
+| `ag_tbl_arena` | 4 | local block of the active allocator table arena cell, 0 = none ([2-allocation.md](2-allocation.md)) |
 
 After the header: the allocator root table ([2-allocation.md](2-allocation.md)),
 then general space. AG 0 additionally reserves, in order: the AG map copies,

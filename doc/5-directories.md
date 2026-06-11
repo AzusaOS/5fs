@@ -73,5 +73,13 @@ but keep their hash). Exact cookie encoding is pinned at format freeze.
 ## Limits
 
 * Name length: 255 UTF-16 code units.
-* `global_depth` max 24 (a 64 MiB table addresses far more entries than any
-  sane directory; flagged before freeze if this needs revisiting).
+* `global_depth` max 9 in v1 (the table must fit one 4 KiB header block:
+  512 buckets). Growing past that needs a multi-block header under a
+  feature flag.
+
+## Implementation notes (v1)
+
+* Bucket buddy-merge is deferred; a directory that empties completely
+  collapses to FMT_EMPTY and frees its blocks.
+* Readdir currently returns name order (collected in memory), not
+  hash-order cookies.
